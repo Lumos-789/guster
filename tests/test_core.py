@@ -55,7 +55,7 @@ class Fixture:
         (self.project / ".git").mkdir(parents=True)
         write(self.project / "AGENTS.md", "# Project\n\nSee [`knowledge/missing.md`](knowledge/missing.md).\n")
         write(self.project / ".agents" / "README.md", "# Index\n\n| plan |\n|---|\n| `plans/plan.md` |\n")
-        write(self.project / ".agents" / "plans" / "plan.md", "# Plan\n")
+        write(self.project / ".agents" / "plans" / "plan.md", "# Plan\n\n**最后更新**: 2026-11-01\n")
         write(self.project / ".agents" / "wiki" / "note.md", "# Unindexed note\n")
         write(self.project / ".agents" / "task-x" / "a.md", "# Task evidence\n")
         write(self.project / ".agents" / "tmp" / "old.md", "# Old scratch\n")
@@ -450,10 +450,16 @@ class GusterCoreTests(unittest.TestCase):
         knowledge = [item for item in registry["artifacts"] if item["kind"] == "knowledge"]
         self.assertEqual(stats["knowledge_total"], len(knowledge))
         self.assertTrue(knowledge)
-        # Hub project cards are state documents, but hub findings are filtered
-        # out of project scope, so they must not stay in the FRS denominator.
-        self.assertEqual(stats["state_docs_total"], 0)
-        self.assertEqual(stats["state_docs_fresh"], 0)
+        # Project plans are state-plane documents and must stay in the FRS
+        # denominator; hub project cards are out of scope and must not.
+        state = [item for item in registry["artifacts"] if item.get("plane") == "state"]
+        self.assertEqual(stats["state_docs_total"], len(state))
+        self.assertEqual(stats["state_docs_total"], 1)
+        self.assertEqual(stats["state_docs_fresh"], 1)
+        self.assertEqual(
+            Path(state[0]["path"]).resolve().parent,
+            (self.fx.project / ".agents" / "plans").resolve(),
+        )
         hub = str(self.fx.hub.resolve())
         for item in policy["findings"]:
             if item["rule"] == "out-of-scope":
@@ -481,8 +487,211 @@ class GusterCoreTests(unittest.TestCase):
         workspace = self.fx.workspace.resolve()
         for item in registry["artifacts"]:
             self.assertIn(workspace, Path(item["path"]).resolve().parents, item["path"])
-        self.assertEqual(policy["stats"]["state_docs_total"], 0)
+        state = [item for item in registry["artifacts"] if item.get("plane") == "state"]
+        self.assertEqual(policy["stats"]["state_docs_total"], len(state))
+        self.assertEqual(policy["stats"]["state_docs_total"], 1)
+        self.assertEqual(policy["stats"]["state_docs_fresh"], 1)
         self.assertGreaterEqual(policy["stats"]["knowledge_total"], 1)
+
+    def test_project_scope_frs_drops_for_a_stale_plan(self) -> None:
+        write(
+            self.fx.project / ".agents" / "plans" / "plan.md",
+            "# Plan\n\n**最后更新**: 2020-01-15\n",
+        )
+        config = ScanConfig(
+            home=self.fx.home,
+            hub=self.fx.hub,
+            roots=[self.fx.project],
+            state_dir=self.fx.tmp / "stale-plan-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="project",
+            now="2026-11-03T00:00:00+08:00",
+        )
+        registry = scan(config)
+        policy = run_policy(registry, config)
+        stats = policy["stats"]
+        self.assertEqual(stats["state_docs_total"], 1)
+        self.assertEqual(stats["state_docs_fresh"], 0)
+        metrics = compute_metrics(registry, policy)
+        self.assertEqual(metrics["scores"]["frs"], 0.0)
+        report = render_report(registry, policy, metrics)
+        self.assertIn("| State freshness | 0.0 | 0.0 | 0/1 fresh", report)
+        self.assertTrue(
+            any(
+                item["rule"] == "stale-state" and "older than" in item["title"]
+                for item in policy["findings"]
+            )
+        )
+
+    def test_group_scope_frs_counts_each_projects_plans(self) -> None:
+        second = self.fx.workspace / "proj2"
+        (second / ".git").mkdir(parents=True)
+        write(second / "AGENTS.md", "# Project 2\n")
+        write(second / ".agents" / "README.md", "# Index\n")
+        write(
+            second / ".agents" / "plans" / "plan.md",
+            "# Plan\n\n**最后更新**: 2020-01-15\n",
+        )
+        config = ScanConfig(
+            home=self.fx.home,
+            hub=self.fx.hub,
+            roots=[self.fx.workspace],
+            state_dir=self.fx.tmp / "group-plans-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="group",
+            now="2026-11-03T00:00:00+08:00",
+        )
+        registry = scan(config)
+        policy = run_policy(registry, config)
+        stats = policy["stats"]
+        self.assertEqual(stats["state_docs_total"], 2)
+        self.assertEqual(stats["state_docs_fresh"], 1)
+        metrics = compute_metrics(registry, policy)
+        self.assertEqual(metrics["scores"]["frs"], 50.0)
+        report = render_report(registry, policy, metrics)
+        self.assertIn("| State freshness | 0.5 | 50.0 | 1/2 fresh", report)
+
+    def test_project_plan_falls_back_to_owning_repo_git_date(self) -> None:
+        import subprocess
+
+        project = self.fx.tmp / "git-plan-project"
+        write(project / "AGENTS.md", "# Git plan project\n")
+        write(project / ".agents" / "plans" / "plan.md", "# Plan\n")
+        subprocess.run(["git", "init", "-q", str(project)], check=True)
+        subprocess.run(["git", "-C", str(project), "add", "-A"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(project),
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=test",
+                "commit",
+                "-q",
+                "-m",
+                "init",
+            ],
+            check=True,
+        )
+        config = ScanConfig(
+            home=self.fx.home,
+            hub=None,
+            roots=[project],
+            state_dir=self.fx.tmp / "git-plan-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="project",
+            now="2026-11-03T00:00:00+08:00",
+        )
+        registry = scan(config)
+        policy = run_policy(registry, config)
+        stats = policy["stats"]
+        self.assertEqual(stats["state_docs_total"], 1)
+        self.assertEqual(stats["state_docs_fresh"], 1)
+        self.assertEqual(stats["state_docs_fresh_from_git"], 1)
+        self.assertNotIn("stale-state", {item["rule"] for item in policy["findings"]})
+
+    def test_empty_state_denominator_prints_zero_over_zero(self) -> None:
+        hub = self.fx.tmp / "empty-state-hub"
+        write(hub / "AGENTS.md", "# Hub\n")
+        write(hub / "knowledge" / "README.md", "# Knowledge\n")
+        write(hub / "tools" / "README.md", "# Tools\n")
+        config = ScanConfig(
+            home=self.fx.tmp / "empty-state-home",
+            hub=hub,
+            roots=[],
+            state_dir=self.fx.tmp / "empty-state-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="hub",
+            now="2026-11-03T00:00:00+08:00",
+        )
+        registry = scan(config)
+        policy = run_policy(registry, config)
+        self.assertEqual(policy["stats"]["state_docs_total"], 0)
+        metrics = compute_metrics(registry, policy)
+        self.assertEqual(metrics["scores"]["frs"], 100.0)
+        report = render_report(registry, policy, metrics)
+        self.assertIn("| State freshness | 1.0 | 100.0 | 0/0 fresh", report)
+
+    def test_empty_icr_child_stays_visible_and_averages_to_one(self) -> None:
+        hub = self.fx.tmp / "zero-icr-hub"
+        state = self.fx.tmp / "zero-icr-state"
+        init_hub(hub, state, yes=True, dry_run=False)
+        write(hub / "knowledge" / "general" / "extra.md", "# Extra\n")
+        config = ScanConfig(
+            home=self.fx.tmp / "zero-icr-home",
+            hub=hub,
+            roots=[],
+            state_dir=state,
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="hub",
+            now="2026-11-03T00:00:00+08:00",
+        )
+        registry = scan(config)
+        policy = run_policy(registry, config)
+        metrics = compute_metrics(registry, policy)
+        self.assertEqual(metrics["raw"]["knowledge_total"], 2)
+        self.assertEqual(metrics["raw"]["knowledge_indexed"], 1)
+        self.assertEqual(metrics["raw"]["agents_dirs_total"], 0)
+        self.assertEqual(metrics["metrics"]["icr"], 0.75)
+        report = render_report(registry, policy, metrics)
+        self.assertIn("knowledge 1/2; .agents index 0/0", report)
+
+    def test_hub_scope_report_counts_project_cards_and_omits_empty_workspaces(self) -> None:
+        hub = self.fx.tmp / "three-card-hub"
+        state = self.fx.tmp / "three-card-state"
+        init_hub(hub, state, yes=True, dry_run=False)
+        for slug in ("alpha", "beta", "gamma"):
+            write(hub / "projects" / f"{slug}.md", f"# {slug}\n\n**最后更新**: 2026-11-01\n")
+        config = ScanConfig(
+            home=self.fx.tmp / "three-card-home",
+            hub=hub,
+            roots=[],
+            state_dir=state,
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="hub",
+            now="2026-11-03T00:00:00+08:00",
+        )
+        registry = scan(config)
+        policy = run_policy(registry, config)
+        metrics = compute_metrics(registry, policy)
+        report = render_report(registry, policy, metrics)
+        self.assertEqual(registry["summary"]["projects"], 0)
+        self.assertEqual(registry["summary"]["project_cards"], 3)
+        self.assertIn("- Projects: **3** (scanned roots: 0)", report)
+        self.assertNotIn("> Workspaces:", report)
+        self.assertIn("state: 4", report)
+
+    def test_hub_doctor_reports_project_cards_not_zero(self) -> None:
+        hub = self.fx.tmp / "doctor-card-hub"
+        state = self.fx.tmp / "doctor-card-state"
+        init_hub(hub, state, yes=True, dry_run=False)
+        for slug in ("alpha", "beta", "gamma"):
+            write(hub / "projects" / f"{slug}.md", f"# {slug}\n\n**最后更新**: 2026-11-01\n")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(
+                [
+                    "doctor",
+                    "--scope",
+                    "hub",
+                    "--hub",
+                    str(hub),
+                    "--state-dir",
+                    str(state),
+                ]
+            )
+        text = out.getvalue()
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertIn("- Projects: **3** (scanned roots: 0)", text)
+        self.assertNotIn("> Workspaces:", text)
 
     def test_hub_scan_covers_extended_areas(self) -> None:
         hub = self.fx.tmp / "extended-hub"

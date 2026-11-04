@@ -294,18 +294,23 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                 )
             )
 
-    # State freshness
-    state_prefixes = ["handoff/", "provision/"]
+    # State freshness. Plans are state-plane documents too, even though their
+    # kind is "plan"; select on the plane so project/group scopes are not
+    # vacuously fresh. Freshness is declared (verified_at / 最后更新 / filename
+    # date) and otherwise falls back to the owning repository's git date.
+    state_prefixes = ["handoff/", "provision/", ".agents/plans/"]
     if hub_layout:
         state_prefixes.append(relative(hub_layout["projects"], hub).rstrip("/") + "/")
     state_docs = [
         item
         for item in artifacts
-        if item.get("kind") == "state"
+        if item.get("plane") == "state"
         and any(item.get("rel", "").startswith(prefix) for prefix in state_prefixes)
     ]
     stats["state_docs_total"] = len(state_docs)
     commit_dates = git_last_commit_dates(hub) if hub else {}
+    project_roots = {str(project["id"]): Path(project["path"]) for project in projects}
+    project_commit_dates: Dict[str, Dict[str, str]] = {}
     stale_missing: List[str] = []
     stale_old: List[Tuple[str, str]] = []
     for item in state_docs:
@@ -318,7 +323,14 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         )
         source = "declared"
         if not verified:
-            verified = commit_dates.get(item.get("rel", ""), "")
+            project_root = project_roots.get(str(item.get("project")))
+            if project_root is None:
+                verified = commit_dates.get(item.get("rel", ""), "")
+            else:
+                key = str(project_root)
+                if key not in project_commit_dates:
+                    project_commit_dates[key] = git_last_commit_dates(project_root)
+                verified = project_commit_dates[key].get(item.get("rel", ""), "")
             source = "git"
         if not verified:
             stale_missing.append(str(path))
@@ -340,7 +352,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                 "stale-state",
                 "medium",
                 "State documents lack a verifiable freshness date",
-                str(hub_layout["projects"]) if hub_layout else "",
+                stale_missing[0],
                 f"{len(stale_missing)} state document(s) have no verified_at or update date.",
                 "Add verified_at to project cards/handoffs/environment docs; refresh active cards before relying on them.",
                 {"count": len(stale_missing), "examples": stale_missing[:10]},
@@ -352,7 +364,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                 "stale-state",
                 "medium",
                 "State documents are older than 90 days",
-                str(hub_layout["projects"]) if hub_layout else "",
+                stale_old[0][0],
                 f"{len(stale_old)} state document(s) are older than the 90-day SLA.",
                 "Re-verify against git/runtime and update verified_at, or archive the document.",
                 {"count": len(stale_old), "examples": stale_old[:10]},

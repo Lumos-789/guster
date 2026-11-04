@@ -309,7 +309,14 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
         "hosts": hosts,
         "governance_docs": governance_docs,
         "plugin_manifests": manifests,
-        "summary": summarize(projects, skills, artifacts, secret_files, inline_bearers),
+        "summary": summarize(
+            projects,
+            skills,
+            artifacts,
+            secret_files,
+            inline_bearers,
+            count_project_cards(hub),
+        ),
     }
     return registry
 
@@ -953,15 +960,34 @@ def scan_plugin_manifests(plugin_root: Optional[Path]) -> Dict[str, Any]:
     return manifests
 
 
+PROJECT_CARD_NAMES = {"_registry.md", "readme.md", "agents.md"}
+
+
+def count_project_cards(hub: Optional[Path]) -> int:
+    """Project cards known to the hub, not the project roots a run scanned."""
+    if not hub:
+        return 0
+    root = resolve_hub_layout(hub)["projects"]
+    if not root.is_dir():
+        return 0
+    return sum(
+        1
+        for path in iter_files(root, suffixes={".md"}, max_depth=1)
+        if path.parent == root and path.name.lower() not in PROJECT_CARD_NAMES
+    )
+
+
 def summarize(
     projects: Sequence[Dict[str, Any]],
     skills: Sequence[Dict[str, Any]],
     artifacts: Sequence[Dict[str, Any]],
     secret_files: Sequence[Dict[str, Any]],
     inline_bearers: Sequence[Dict[str, Any]],
+    project_cards: int = 0,
 ) -> Dict[str, Any]:
     return {
         "projects": len(projects),
+        "project_cards": project_cards,
         "agents_dirs": sum(1 for project in projects if project.get("agents_dir")),
         "agents_with_index": sum(1 for project in projects if project.get("has_index")),
         "skills": len(skills),

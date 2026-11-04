@@ -2,6 +2,21 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.5.5 — 2026-11-05
+
+- FRS now counts every document on the state plane, not only `kind: state`.
+  Project `.agents/plans/*` therefore enters the FRS denominator, so a project
+  or group with a stale plan loses freshness points instead of reporting
+  `100.0 (0/0)`. Plans use the existing 90-day rule: a declared
+  `verified_at`/`最后更新` or filename date, otherwise the last git commit of the
+  repository that owns them. Stale-state findings now point at the offending
+  in-scope document, so a project/group report explains the lost points instead
+  of filtering the finding out as hub-level. Empty denominators still print
+  `0/0` and score 1.0.
+- `doctor --scope hub` reports the project cards known to the hub
+  (`Projects: 3 (scanned roots: 0)`) instead of the number of scanned roots, and
+  omits the empty `Workspaces:` header line when the scope has no workspaces.
+
 ## 0.5.4 — 2026-11-04
 
 - Removed three skill sub-pages that nothing pointed at: `init/SETUP.md`,

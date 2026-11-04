@@ -98,7 +98,11 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 - **RBR** resident budget ratio
 - **PCR** placement compliance rate
 - **ICR** index coverage rate
-- **FRS** state freshness rate
+- **FRS** state freshness rate: share of documents on the state plane (hub
+  project cards, handoffs, provision records and `.agents/plans/*`) that were
+  verified within the 90-day SLA. The date comes from `verified_at`, a
+  `最后更新` line, an 8-digit date in the filename, or the last git commit of
+  the repository that owns the document.
 - **PHR** pointer health rate
 - **SIR** secret isolation rate
 

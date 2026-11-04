@@ -152,7 +152,13 @@ def print_scan_summary(registry: Dict[str, Any], config: ScanConfig) -> None:
     print("Guster scan")
     print(f"  workspaces: {', '.join(registry.get('workspaces', []))}")
     print(f"  hub:        {registry.get('hub') or '(none)'}")
-    print(f"  projects:   {summary.get('projects', 0)}")
+    if config.scope == "hub":
+        print(
+            f"  projects:   {summary.get('project_cards', 0)} "
+            f"(scanned roots: {summary.get('projects', 0)})"
+        )
+    else:
+        print(f"  projects:   {summary.get('projects', 0)}")
     print(f"  .agents:    {summary.get('agents_dirs', 0)} (indexed {summary.get('agents_with_index', 0)})")
     print(f"  skills:     {summary.get('skills', 0)} unique / {summary.get('skill_copies', 0)} copies")
     print(f"  knowledge:  {summary.get('knowledge', 0)}")

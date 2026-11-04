@@ -26,16 +26,24 @@ def render_report(
     scores = metric_result.get("scores", {})
     raw = metric_result.get("raw", {})
     findings = policy_result.get("findings", [])
+    scope = metric_result.get("scope", registry.get("scope", "machine"))
+    workspaces = registry.get("workspaces", [])
+    if scope == "hub":
+        project_cards = summary.get("project_cards", 0)
+        projects_line = f"- Projects: **{project_cards}** (scanned roots: {summary.get('projects', 0)})"
+    else:
+        projects_line = f"- Projects: **{summary.get('projects', 0)}**"
 
     lines: List[str] = []
     lines.append("# Guster Context Health")
     lines.append("")
     lines.append(f"> Generated: {metric_result.get('generated_at', now_iso())}")
-    lines.append(f"> Workspaces: {', '.join(registry.get('workspaces', []))}")
+    if workspaces:
+        lines.append(f"> Workspaces: {', '.join(workspaces)}")
     lines.append("")
     lines.append("## Summary")
     lines.append("")
-    lines.append(f"- Projects: **{summary.get('projects', 0)}**")
+    lines.append(projects_line)
     lines.append(
         f"- `.agents/` dirs: **{summary.get('agents_dirs', 0)}** "
         f"(with index: {summary.get('agents_with_index', 0)})"
@@ -56,7 +64,6 @@ def render_report(
     lines.append("")
     lines.append("## Context Health Index")
     lines.append("")
-    scope = metric_result.get("scope", "machine")
     dims = metric_result.get("dims") or []
     label = f"{scope} scope"
     lines.append(f"**CHI: {metric_result.get('chi', 0)} / 100** ({label})")
@@ -159,12 +166,17 @@ def render_report(
 def render_status(registry: Dict[str, Any], metric_result: Optional[Dict[str, Any]] = None) -> str:
     plugin = registry.get("plugin", {})
     summary = registry.get("summary", {})
+    projects = (
+        summary.get("project_cards", 0)
+        if registry.get("scope") == "hub"
+        else summary.get("projects", 0)
+    )
     lines = [
         f"Guster {plugin.get('version', '?')}",
         f"generated: {registry.get('generated_at', '?')}",
         f"hub: {registry.get('hub') or '(none)'}",
         f"workspaces: {', '.join(registry.get('workspaces', []))}",
-        f"projects: {summary.get('projects', 0)}",
+        f"projects: {projects}",
         f"skills: {summary.get('skills', 0)} unique / {summary.get('skill_copies', 0)} copies",
         f"knowledge: {summary.get('knowledge', 0)}",
         f"credentials: {summary.get('secret_files', 0)} files; {summary.get('inline_bearers', 0)} inline",
