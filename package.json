@@ -1,0 +1,47 @@
+{
+  "name": "guster",
+  "version": "0.5.3",
+  "description": "Discover, audit, plan and evolve agent context across projects, skills, tools, knowledge and credentials; optionally scaffold a lightweight Guster Hub for durable knowledge and project state.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -v && node --test tests/test_plugin.mjs"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/guster",
+    "src/guster/*.py",
+    "skills/guster/",
+    "skills/guster-hub/",
+    "templates/hub/",
+    "index.js",
+    "cordis.patch.yml",
+    ".codex-plugin/plugin.json",
+    ".zcode-plugin/plugin.json",
+    "README.md",
+    "README_CN.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lumos-789/guster"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "agent",
+    "context",
+    "governance",
+    "skills"
+  ]
+}

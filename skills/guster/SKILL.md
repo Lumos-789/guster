@@ -1,0 +1,130 @@
+---
+name: guster
+description: Audit and evolve agent context across projects, skills, tools, knowledge and credential references. Use when the user says 上下文治理/项目上下文/上下文结构/整理 .agents/归位/搬迁/断链/健康评分/凭据登记, or asks where a fact, file, skill or credential belongs, or wants a before/after context health score.
+---
+
+# Guster
+
+Guster is the control plane for agent context. It discovers projects, instruction files, skills, tools, knowledge, state, evidence and credential references; diagnoses drift; computes a health score; and produces reviewable migration plans.
+
+Guster Hub is the data plane: the optional local repository that holds knowledge, project cards, tools and reports. Guster the plugin does not replace the hub.
+
+For a new data plane, use the companion `guster-hub` skill or `guster hub init`.
+
+## When to use
+
+Use Guster when the user asks:
+
+- to inspect or reorganize the machine's agent context structure;
+- where a file, skill, tool, project card, knowledge note or credential reference belongs;
+- to audit drift, duplicates, broken pointers, budgets or stale state;
+- to initialize a project with the standard `.agents/` layout;
+- to migrate task folders into `plans/`, `wiki/`, `evidence/`, `tmp/` or `archive/`;
+- for a context health score or a before/after comparison;
+- to install the same context rules on another machine or workspace.
+
+Do not use Guster for ordinary code edits, runtime debugging or content writing unless the request is about the context structure itself.
+
+## Scope
+
+Four levels. `--scope` is inferred from `--root` when omitted.
+
+| Level | Command | Covers | Scored dimensions |
+|---|---|---|---|
+| machine | `guster doctor` | every repo under the workspace roots plus the hub | SSR RBR PCR ICR FRS PHR SIR |
+| hub | `guster doctor --scope hub` | knowledge, project cards, tools, reports, handoffs | SSR ICR FRS PHR |
+| group | `guster doctor --root A --root B [--root C]` | a requirement family or any set of related repos | SSR PCR ICR FRS PHR |
+| project | `guster doctor --root <repo>` | one repository | SSR PCR ICR FRS PHR |
+
+Rules:
+
+- Machine level owns resident budgets, skill budgets and credential layout.
+- Hub level owns knowledge indexing, project-card freshness and hub pointers.
+- Group level exposes cross-repo facts: the same file name with different content,
+  duplicated copies, and per-repo placement gaps.
+- Project level shows only that repo's findings and states how many machine-level
+  findings were hidden.
+- Every scoped run writes to `~/.agents/guster/scoped/<hash>/`, so it never
+  overwrites the machine-wide registry or trend.
+- Pointer checks skip documentation templates (`draft-NNN.md`,
+  `daily-YYYY-MM-DD.md`, `0X-xxx.md`) and `~/` paths that sit on an
+  `ssh`/`scp`/`rsync` command line, because those name a remote home.
+
+## Workflow
+
+1. `guster status`
+2. `guster scan --json` (add `--root <project>` for a single project)
+3. `guster doctor`
+4. `guster score --write`
+5. `guster plan findings` or a targeted `guster plan move|init`
+6. Read the plan with the user.
+7. `guster apply <plan> --yes`
+8. `guster score --trend`
+
+All workspace writes are gated behind a plan and `--yes`.
+
+## Commands
+
+```bash
+guster status
+guster scan --root ~/Projects --json
+guster doctor
+guster score --write --trend
+guster plan findings
+guster plan move --from <src> --to <dst>
+guster plan init --project <path>
+guster apply <plan> --yes
+guster init --home
+guster init --project <path> --yes
+guster hub init --path <hub> --yes
+guster hub attach --path <hub>
+guster hub status
+guster hub validate
+guster link
+guster export --format md
+guster credentials
+guster upgrade
+```
+
+## Gates
+
+- **Never persist or print credential values.** Paths, variable names and redacted forms only.
+- **Never auto-commit, auto-push or auto-deploy.**
+- **Never apply a plan without explicit confirmation.**
+- **Never treat a company repository's tracked files as ordinary migration targets.**
+- **Fail loud** on an unknown workspace, malformed plan or missing backup.
+- Prefer no-focus, CLI-only operation. Do not activate apps or switch Spaces.
+- If the scan finds a credential in git, stop structural work and report it as critical.
+
+## Waivers
+
+A finding you knowingly accept is waived in `<hub>/hub.yaml` under `doctor.waivers`,
+never by deleting the check:
+
+```yaml
+doctor:
+  waivers:
+    - rule: broken-pointer
+      path: ~/work/company-repo
+      reason: company-tracked doc, owned upstream
+```
+
+`path` is optional; without it the whole rule is waived. Every waiver needs a
+`reason` — a malformed block fails loud. Waived findings still appear in
+`doctor --json` and in the report's `Waived` section, so the decision stays
+visible. Use a waiver only when the fix is outside your authority (company
+tracked files, host limitations), not to skip ordinary work.
+
+## References
+
+- `reference/framework.md` — 1-3-5-8 framework and placement tree.
+- `reference/metrics.md` — metric definitions, targets and CHI.
+- `reference/placement.md` — the eight planes and `.agents/` slots.
+
+## Exit codes
+
+- `0`: success; no critical/high findings for `doctor`.
+- `2`: high findings, or plan/apply refused.
+- `3`: critical findings.
+- `4`: apply/init failed.
+- `1`: tool error.

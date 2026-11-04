@@ -1,0 +1,203 @@
+# Guster
+
+Guster is a distributable agent plugin that audits and evolves the context of a whole machine: projects, instruction files, skills, tools, knowledge, project state, evidence and credential references. It can also scaffold a lightweight Hub for durable knowledge and project state.
+
+It is the **control plane** for agent context. A Guster Hub is the optional **data plane**: the local repository that holds project cards, knowledge, tools and reports. The plugin does not replace the hub; it discovers it, validates it, and helps keep it coherent.
+
+## What it does
+
+- **Discovers** Git roots, `AGENTS.md` / `CLAUDE.md`, `.agents/` directories, skills, tools, knowledge, state, evidence and credential locations.
+- **Diagnoses** resident budgets, skill metadata budgets, copy drift, duplicate canonical sources, orphan knowledge, broken pointers, misplaced task folders, stale state, inline tokens and credentials outside the canonical root.
+- **Scores** context health with seven dimensions and a CHI dashboard.
+- **Plans** structural changes as reviewable JSON plans.
+- **Applies** only with `--yes`, with a backup and rollback path.
+- **Initializes** a standard `.agents/` layout for a new project or a new machine.
+- **Scaffolds** a lite Guster Hub when the user does not have a data plane yet.
+
+## Quick start
+
+```bash
+cd <checkout>
+./bin/guster init --home --yes
+./bin/guster hub init --path <hub> --yes
+./bin/guster scan
+./bin/guster doctor
+./bin/guster score --write
+```
+
+The CLI is Python 3.9+ and has no third-party Python dependencies.
+
+Install a stable command on your `PATH`:
+
+```bash
+ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
+```
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `guster status` | Show plugin version, registry and health summary |
+| `guster scan` | Discover context assets and write `registry.json` |
+| `guster doctor` | Run policy checks and write `findings.json` |
+| `guster score` | Compute metrics and CHI; append `metrics.jsonl` |
+| `guster plan findings` | Turn findings into a review checklist |
+| `guster plan move` | Plan a move with backup and pointer |
+| `guster plan init` | Plan a standard `.agents/` layout |
+| `guster apply <plan>` | Dry-run by default; `--yes` writes with backup |
+| `guster init` | Initialize the state home or a project |
+| `guster hub init` | Create a lite Hub and attach it to the local config |
+| `guster hub attach` | Attach an existing Hub without copying its content |
+| `guster hub status` | Show the Hub manifest and contract checks |
+| `guster hub validate` | Validate the lite Hub contract |
+| `guster link` | Check context pointers |
+| `guster export` | Export a redacted Markdown/JSON report |
+| `guster credentials` | List registered credentials by scope (company / personal) |
+| `guster upgrade` | Check Codex/ZCode/package manifest versions |
+
+## Lite Hub
+
+The plugin can create a deliberately small data plane:
+
+```text
+Guster/
+├── AGENTS.md
+├── README.md
+├── hub.yaml
+├── knowledge/
+│   ├── README.md
+│   └── general/start-here.md
+├── projects/
+│   └── _registry.md
+└── tools/
+    └── README.md
+```
+
+`tools/` is present as an index and contract, with no tool preinstalled. `handoff/` and `reports/` are optional and are not created by the lite profile. The scanner skips missing optional directories.
+
+`guster hub init` refuses a non-empty target, writes a reviewable plan, and attaches the new Hub to `~/.agents/guster/config.json`. Use `guster hub attach --path <hub>` for an existing Hub.
+
+The three core roots can be chosen at creation time:
+
+```bash
+guster hub init --path <hub> --knowledge notes --projects work --tools scripts --yes
+```
+
+They are recorded in `hub.yaml` under `paths` and can be changed later. Paths must be relative to the Hub and must stay inside it.
+
+A full Hub uses `profile: full` and is scanned across knowledge, projects, handoff, reports, `Human Output`, provision, tools, manuals, cron tasks, OpenSpec changes, archive and `strategy.md`. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
+
+## Health model
+
+```text
+CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
+    + 0.15 FRS + 0.10 PHR + 0.10 SIR
+```
+
+- **SSR** single-source rate
+- **RBR** resident budget ratio
+- **PCR** placement compliance rate
+- **ICR** index coverage rate
+- **FRS** state freshness rate
+- **PHR** pointer health rate
+- **SIR** secret isolation rate
+
+Red-line failures override the score: credential in git, broken resident pointer, duplicate canonical source, resident hard-cap breach, or a governance entry pointing at an archived asset.
+
+## Scopes
+
+| Level | Command | Scored dimensions |
+|---|---|---|
+| machine | `guster doctor` | SSR RBR PCR ICR FRS PHR SIR |
+| hub | `guster doctor --scope hub` | SSR ICR FRS PHR |
+| group | `guster doctor --root A --root B` | SSR PCR ICR FRS PHR |
+| project | `guster doctor --root <repo>` | SSR PCR ICR FRS PHR |
+
+Scoped runs write to `~/.agents/guster/scoped/<hash>/`.
+
+Every scoped run applies one boundary to both sides of the report: an artifact
+counts toward a denominator only when a finding about it could also appear in
+that scope. `project` and `group` runs therefore drop hub knowledge, hub state
+documents and the machine-level local wiki from ICR/FRS/PHR unless they live
+under one of the given roots; the report table shows exactly the dimensions that
+enter CHI, and any extra value is labeled `Not counted in CHI`. A dimension with
+no in-scope artifacts stays vacuous (`0/0` in the raw column, score 1.0) instead
+of borrowing health from out-of-scope files. This changes CHI for `project` and
+`group` scopes; hub health keeps being reported by `--scope hub` and the
+machine-wide run.
+
+## Credential registry
+
+Guster reads `~/.agents/credentials/registry.md` and checks it against every credential file it finds:
+
+- `secret-undeclared` - a credential file is not registered.
+- `secret-missing` - a registered location no longer exists.
+
+The registry holds scope (`company` / `personal`), site, account, kind, location and variable names.
+It never holds values. `guster credentials` prints the split.
+
+## The eight planes
+
+1. **Truth** — code, tests, build and runtime config.
+2. **Instruction** — `AGENTS.md` and policies.
+3. **Capability** — skills, tools, MCP, plugins, scripts.
+4. **Knowledge** — durable principles, methods, business semantics, pitfalls.
+5. **State** — project cards, handoffs, environment and port registries.
+6. **Evidence** — reports, screenshots, videos, test output.
+7. **Runtime** — sessions, caches, logs, temp files, browser profiles.
+8. **Secret** — passwords, tokens, keys, cookies; references only.
+
+## Safety
+
+- Read-only by default. `apply`, `init --yes`, `hub init --yes` and `hub attach` are the only writers.
+- Credential values are never persisted or printed; scans keep only paths and redacted shapes.
+- No automatic `git add`, `commit`, `push` or deploy.
+- Company/public repository tracked files are not ordinary migration targets.
+- Plans are written to `~/.agents/guster/plans/`; backups to `~/.agents/guster/backups/`.
+
+## Plugin hosts
+
+| Host | Manifest |
+|---|---|
+| Codex | `.codex-plugin/plugin.json` |
+| ZCode | `.zcode-plugin/plugin.json` |
+| DSH | `package.json` + `cordis.patch.yml` |
+
+All three point at `skills/` (the `guster` and `guster-hub` skills). Keep their versions synchronized.
+
+```bash
+# DSH bundle
+dsh plugin add /path/to/guster
+```
+
+### Extra skill roots
+
+By default guster scans `~/.agents/skills`, `~/.codex/skills`, `~/.dsh/skills` and
+`~/.claude/skills`. Additional hosts stay local and are injected without changing
+the published source:
+
+```bash
+export GUSTER_EXTRA_SKILL_ROOTS="name=/path/to/skills:other=/another/path"
+```
+
+## Project layout
+
+```text
+skills/guster/        agent-facing skill
+skills/guster-hub/    hub bootstrap and validation skill
+src/guster/           Python CLI and policy engine
+bin/guster            executable wrapper
+templates/hub/        lite Hub scaffold (the only shipped template set)
+tests/                fixture and plugin tests
+```
+
+## Test
+
+```bash
+python3 -m unittest discover -s tests -v
+node --test tests/test_plugin.mjs
+```
+
+## License
+
+MIT © Lumos-789

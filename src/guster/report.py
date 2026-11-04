@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+
+from .util import human_bytes, now_iso, save_json, write_text
+
+
+SEVERITY_LABEL = {
+    "critical": "CRITICAL",
+    "high": "HIGH",
+    "medium": "MEDIUM",
+    "low": "LOW",
+    "info": "INFO",
+}
+
+
+def render_report(
+    registry: Dict[str, Any],
+    policy_result: Dict[str, Any],
+    metric_result: Dict[str, Any],
+) -> str:
+    summary = registry.get("summary", {})
+    metrics = metric_result.get("metrics", {})
+    scores = metric_result.get("scores", {})
+    raw = metric_result.get("raw", {})
+    findings = policy_result.get("findings", [])
+
+    lines: List[str] = []
+    lines.append("# Guster Context Health")
+    lines.append("")
+    lines.append(f"> Generated: {metric_result.get('generated_at', now_iso())}")
+    lines.append(f"> Workspaces: {', '.join(registry.get('workspaces', []))}")
+    lines.append("")
+    lines.append("## Summary")
+    lines.append("")
+    lines.append(f"- Projects: **{summary.get('projects', 0)}**")
+    lines.append(
+        f"- `.agents/` dirs: **{summary.get('agents_dirs', 0)}** "
+        f"(with index: {summary.get('agents_with_index', 0)})"
+    )
+    lines.append(
+        f"- Skills: **{summary.get('skills', 0)}** unique / "
+        f"**{summary.get('skill_copies', 0)}** copies"
+    )
+    lines.append(
+        f"- Knowledge: **{summary.get('knowledge', 0)}** files; "
+        f"state: {summary.get('state', 0)}; evidence: {summary.get('evidence', 0)}"
+    )
+    lines.append(
+        f"- Credentials: **{summary.get('secret_files', 0)}** files; "
+        f"outside canonical roots: {summary.get('secret_outside_root', 0)}; "
+        f"inline bearers: {summary.get('inline_bearers', 0)}"
+    )
+    lines.append("")
+    lines.append("## Context Health Index")
+    lines.append("")
+    scope = metric_result.get("scope", "machine")
+    dims = metric_result.get("dims") or []
+    label = f"{scope} scope"
+    lines.append(f"**CHI: {metric_result.get('chi', 0)} / 100** ({label})")
+    lines.append("")
+    lines.append("| Dimension | Value | Score | Raw |")
+    lines.append("|---|---:|---:|---|")
+    rows = [
+        (
+            "Single source",
+            "ssr",
+            metrics.get("ssr"),
+            scores.get("ssr"),
+            f"{raw.get('topics_total', 0) - raw.get('topics_multi', 0)}/{raw.get('topics_total', 0)} topics single-source",
+        ),
+        ("Resident budget", "rbr", metrics.get("rbr"), scores.get("rbr"), f"{human_bytes(raw.get('resident_bytes', 0))}; skills {raw.get('skill_chars', 0)} chars"),
+        ("Placement", "pcr", metrics.get("pcr"), scores.get("pcr"), f"{raw.get('agents_dirs_compliant', 0)}/{raw.get('agents_dirs_total', 0)} compliant"),
+        (
+            "Index coverage",
+            "icr",
+            metrics.get("icr"),
+            scores.get("icr"),
+            f"knowledge {raw.get('knowledge_indexed', 0)}/{raw.get('knowledge_total', 0)}; "
+            f".agents index {raw.get('agents_indexed', 0)}/{raw.get('agents_dirs_total', 0)}",
+        ),
+        (
+            "State freshness",
+            "frs",
+            metrics.get("frs"),
+            scores.get("frs"),
+            f"{raw.get('state_docs_fresh', 0)}/{raw.get('state_docs_total', 0)} fresh "
+            f"({raw.get('state_docs_fresh_declared', 0)} declared, {raw.get('state_docs_fresh_from_git', 0)} from git)",
+        ),
+        ("Pointer health", "phr", metrics.get("phr"), scores.get("phr"), f"{raw.get('pointers_valid', 0)}/{raw.get('pointers_checked', 0)} valid"),
+        ("Secret isolation", "sir", metrics.get("sir"), scores.get("sir"), f"{raw.get('secret_outside_root', 0)} outside; {raw.get('inline_bearers', 0)} inline"),
+    ]
+    for label, key, value, score, detail in rows:
+        if dims and key not in dims:
+            continue
+        lines.append(f"| {label} | {value} | {score} | {detail} |")
+    lines.append("")
+    if "gcr" not in dims:
+        lines.append(
+            f"_Not counted in CHI: Governance simplicity {metrics.get('gcr')} "
+            f"(score {scores.get('gcr')}, {raw.get('governance_docs', 0)} docs)._"
+        )
+        lines.append("")
+    lines.append("## Findings")
+    lines.append("")
+    if not findings:
+        lines.append("No findings.")
+    else:
+        counts: Dict[str, int] = {}
+        for item in findings:
+            counts[item["severity"]] = counts.get(item["severity"], 0) + 1
+        lines.append(
+            "Counts: "
+            + ", ".join(
+                f"{SEVERITY_LABEL.get(level, level)} {counts.get(level, 0)}"
+                for level in ("critical", "high", "medium", "low", "info")
+                if counts.get(level)
+            )
+        )
+        lines.append("")
+        for item in findings[:80]:
+            label = SEVERITY_LABEL.get(item["severity"], item["severity"])
+            lines.append(f"### [{label}] {item['title']}")
+            lines.append("")
+            lines.append(f"- Rule: `{item['rule']}`")
+            lines.append(f"- Path: `{item['path']}`")
+            lines.append(f"- {item['message']}")
+            lines.append(f"- Action: {item['suggestion']}")
+            evidence = item.get("evidence") or {}
+            if evidence:
+                compact = json.dumps(evidence, ensure_ascii=False)
+                if len(compact) > 500:
+                    compact = compact[:500] + "..."
+                lines.append(f"- Evidence: `{compact}`")
+            lines.append("")
+        if len(findings) > 80:
+            lines.append(f"_...and {len(findings) - 80} more findings; use `guster doctor --json`._")
+            lines.append("")
+    waived = policy_result.get("waived", [])
+    if waived:
+        lines.append(f"## Waived ({len(waived)})")
+        lines.append("")
+        for item in waived:
+            lines.append(f"- `{item['rule']}` — `{item['path']}` — {item.get('waiver_reason', '')}")
+        lines.append("")
+    lines.append("## Next Actions")
+    lines.append("")
+    lines.append("1. Fix critical findings first: credential in git, broken resident pointer, duplicate canonical source.")
+    lines.append("2. Run `guster plan findings` to turn the remaining findings into a review checklist.")
+    lines.append("3. Run `guster plan move ...` or `guster plan init ...` for structural changes.")
+    lines.append("4. Apply with `guster apply <plan> --yes` only after reviewing the plan.")
+    lines.append("5. Re-run `guster score --write` and compare the trend.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_status(registry: Dict[str, Any], metric_result: Optional[Dict[str, Any]] = None) -> str:
+    plugin = registry.get("plugin", {})
+    summary = registry.get("summary", {})
+    lines = [
+        f"Guster {plugin.get('version', '?')}",
+        f"generated: {registry.get('generated_at', '?')}",
+        f"hub: {registry.get('hub') or '(none)'}",
+        f"workspaces: {', '.join(registry.get('workspaces', []))}",
+        f"projects: {summary.get('projects', 0)}",
+        f"skills: {summary.get('skills', 0)} unique / {summary.get('skill_copies', 0)} copies",
+        f"knowledge: {summary.get('knowledge', 0)}",
+        f"credentials: {summary.get('secret_files', 0)} files; {summary.get('inline_bearers', 0)} inline",
+    ]
+    if metric_result:
+        lines.append(f"CHI: {metric_result.get('chi')}")
+    return "\n".join(lines)
+
+
+def redacted_registry(registry: Dict[str, Any]) -> Dict[str, Any]:
+    def scrub(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: scrub(item)
+                for key, item in value.items()
+                if key.lower() not in {"value", "password", "token", "secret", "authorization"}
+            }
+        if isinstance(value, list):
+            return [scrub(item) for item in value]
+        return value
+
+    return scrub(registry)
+
+
+def write_report(path: Path, text: str) -> None:
+    write_text(path, text)
+
+
+def write_json(path: Path, data: Any) -> None:
+    save_json(path, data)

@@ -1,0 +1,13 @@
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+.agents/
+.venv/
+venv/
+node_modules/
+*.egg-info/

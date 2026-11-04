@@ -1,0 +1,539 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import subprocess
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+
+
+EXCLUDE_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "build",
+    "dist",
+    "out",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".next",
+    ".nuxt",
+    ".venv",
+    "venv",
+    "target",
+    ".idea",
+    ".vscode",
+}
+
+TEXT_SUFFIXES = {
+    ".md",
+    ".markdown",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".py",
+    ".js",
+    ".mjs",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".go",
+    ".java",
+    ".kt",
+    ".rs",
+    ".rb",
+    ".php",
+    ".sql",
+}
+
+POINTER_SUFFIXES = {
+    ".md",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".py",
+    ".js",
+    ".mjs",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".go",
+    ".java",
+    ".kt",
+    ".rs",
+    ".sql",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".mp4",
+    ".mov",
+    ".jsonl",
+    ".csv",
+}
+
+
+def now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def today_iso() -> str:
+    return datetime.now().astimezone().date().isoformat()
+
+
+def expand_path(value: str, base: Optional[Path] = None) -> Path:
+    raw = os.path.expanduser(os.path.expandvars(value))
+    path = Path(raw)
+    if not path.is_absolute() and base is not None:
+        path = base / path
+    return path
+
+
+def read_text(path: Path, limit: Optional[int] = None) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if limit is not None and len(text) > limit:
+        return text[:limit]
+    return text
+
+
+def write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def sha256_text(text: str) -> str:
+    return sha256_bytes(text.encode("utf-8"))
+
+
+def sha256_file(path: Path) -> str:
+    try:
+        return sha256_bytes(path.read_bytes())
+    except OSError:
+        return ""
+
+
+def is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def relative(path: Path, base: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(base.resolve()))
+    except (OSError, ValueError):
+        return str(path)
+
+
+def slugify(value: str) -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9._-]+", "-", value)
+    value = re.sub(r"-{2,}", "-", value).strip("-")
+    return value or "item"
+
+
+def human_bytes(value: int) -> str:
+    if value < 1024:
+        return f"{value} B"
+    if value < 1024 * 1024:
+        return f"{value / 1024:.1f} KB"
+    return f"{value / (1024 * 1024):.1f} MB"
+
+
+def json_dumps(data: Any, pretty: bool = True) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2 if pretty else None, sort_keys=False)
+
+
+def load_json(path: Path, default: Any = None) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path: Path, data: Any) -> None:
+    write_text(path, json_dumps(data) + "\n")
+
+
+def parse_frontmatter(text: str) -> Tuple[Dict[str, str], str]:
+    """Parse the small YAML frontmatter subset used by agent files.
+
+    Supports scalar keys, quoted values and literal/folded blocks. It deliberately
+    avoids a PyYAML dependency so the plugin runs on a stock Python install.
+    """
+    if not text.startswith("---"):
+        return {}, text
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    end: Optional[int] = None
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            end = index
+            break
+    if end is None:
+        return {}, text
+
+    data: Dict[str, str] = {}
+    index = 1
+    while index < end:
+        line = lines[index]
+        if not line.strip() or line.lstrip().startswith("#"):
+            index += 1
+            continue
+        if line.startswith((" ", "\t")) or ":" not in line:
+            index += 1
+            continue
+        key, raw = line.split(":", 1)
+        key = key.strip()
+        value = raw.strip()
+        if value in ("|", ">"):
+            block: List[str] = []
+            index += 1
+            while index < end:
+                candidate = lines[index]
+                if candidate.startswith("  "):
+                    block.append(candidate[2:])
+                elif not candidate.strip():
+                    block.append("")
+                else:
+                    break
+                index += 1
+            data[key] = ("\n" if value == "|" else " ").join(block).strip()
+            continue
+        data[key] = unquote(value)
+        index += 1
+    return data, "\n".join(lines[end + 1 :])
+
+
+def unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        return value[1:-1]
+    return value
+
+
+def first_heading(text: str, fallback: str = "") -> str:
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return fallback
+
+
+def iter_files(
+    root: Path,
+    suffixes: Optional[Set[str]] = None,
+    max_depth: Optional[int] = None,
+    skip_dirs: Optional[Set[str]] = None,
+) -> Iterator[Path]:
+    if not root.exists():
+        return
+    skip = EXCLUDE_DIRS if skip_dirs is None else skip_dirs
+    root = root.resolve()
+    for current, dirs, files in os.walk(root):
+        current_path = Path(current)
+        depth = len(current_path.relative_to(root).parts)
+        if max_depth is not None and depth >= max_depth:
+            dirs[:] = []
+        dirs[:] = sorted(d for d in dirs if d not in skip)
+        for name in sorted(files):
+            path = current_path / name
+            if suffixes is not None and path.suffix.lower() not in suffixes:
+                continue
+            yield path
+
+
+def find_git_roots(roots: Sequence[Path], max_depth: int = 5) -> List[Path]:
+    found: List[Path] = []
+    seen: Set[str] = set()
+
+    def visit(path: Path, depth: int) -> None:
+        try:
+            resolved = str(path.resolve())
+        except OSError:
+            return
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        if not path.is_dir():
+            return
+        if (path / ".git").exists():
+            found.append(path)
+            return
+        if depth >= max_depth:
+            return
+        try:
+            entries = sorted(path.iterdir(), key=lambda item: item.name)
+        except OSError:
+            return
+        for entry in entries:
+            if entry.name in EXCLUDE_DIRS or entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                visit(entry, depth + 1)
+
+    for root in roots:
+        visit(root, 0)
+    return sorted(found, key=lambda item: str(item))
+
+
+def git_tracked(root: Path) -> Set[str]:
+    if not (root / ".git").exists():
+        return set()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if result.returncode != 0:
+        return set()
+    tracked: Set[str] = set()
+    for raw in result.stdout.split(b"\x00"):
+        if not raw:
+            continue
+        tracked.add(raw.decode("utf-8", errors="replace"))
+    return tracked
+
+
+def git_status(root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "status", "--short"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip()
+
+
+def git_last_commit_dates(root: Path) -> Dict[str, str]:
+    """Map repo-relative paths to the commit date of their most recent change."""
+    if not (root / ".git").exists():
+        return {}
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "log", "--format=%x00%cI", "--name-only"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if result.returncode != 0:
+        return {}
+    dates: Dict[str, str] = {}
+    current = ""
+    for line in result.stdout.splitlines():
+        if line.startswith("\x00"):
+            current = line[1:].strip()
+            continue
+        rel = line.strip()
+        if not rel or not current:
+            continue
+        dates.setdefault(rel, current)
+    return dates
+
+
+def extract_pointers(text: str) -> List[str]:
+    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    pointers: List[str] = []
+
+    def add(candidate: str) -> None:
+        # `[`path`](path)` matches both the link and the inline-code pass; count
+        # each target once per file so pointer health is not double-weighted.
+        if _looks_like_pointer(candidate) and candidate not in pointers:
+            pointers.append(candidate)
+
+    for match in re.finditer(r"\[[^\]]*\]\(([^)]+)\)", text):
+        add(match.group(1).strip())
+    for match in re.finditer(r"`([^`\n]+)`", text):
+        candidate = match.group(1).strip()
+        if candidate.startswith("~/") and _is_remote_command(_line_at(text, match.start())):
+            continue
+        add(candidate)
+    return pointers
+
+
+def _line_at(text: str, offset: int) -> str:
+    start = text.rfind("\n", 0, offset) + 1
+    end = text.find("\n", offset)
+    return text[start : end if end != -1 else len(text)]
+
+
+def _is_remote_command(line: str) -> bool:
+    # `ssh mini` + `~/...` in the same line names the remote home, not a local path.
+    if re.search(r"\bssh\s+(?:-[\w-]+\s+)*[A-Za-z0-9._-]+", line):
+        return True
+    return re.search(r"\b(?:scp|rsync)\b[^\n]*?[A-Za-z0-9._-]+:~/", line) is not None
+
+
+def _looks_like_pointer(candidate: str) -> bool:
+    if not candidate or _is_placeholder(candidate):
+        return False
+    if any(char.isspace() for char in candidate):
+        return False
+    if candidate.startswith(("http://", "https://", "mailto:", "tel:", "#", "...")):
+        return False
+    suffix = Path(candidate).suffix.lower()
+    if candidate.startswith("~/"):
+        return True
+    if candidate.startswith(("./", "../")):
+        return True
+    if candidate.startswith("/"):
+        known_roots = (
+            "/Users/",
+            "/home/",
+            "/tmp/",
+            "/Applications/",
+            "/System/",
+            "/opt/",
+            "/usr/",
+            "/var/",
+            "/etc/",
+            "/private/",
+            "/Volumes/",
+        )
+        return candidate.startswith(known_roots)
+    return "/" in candidate and suffix in POINTER_SUFFIXES
+
+
+def _is_placeholder(pointer: str) -> bool:
+    if any(token in pointer for token in ("<", ">", "*", "{", "}", "$", "|")):
+        return True
+    # File templates in docs: draft-NNN.md, daily-YYYY-MM-DD.md, 0X-xxx.md.
+    return re.search(r"(?:N{2,}|Y{4}|X{3,}|x{3,}|0[xX][-_/])", pointer) is not None
+
+
+def _strip_pointer(pointer: str) -> str:
+    pointer = pointer.strip()
+    if pointer.startswith("<") and ">" in pointer:
+        pointer = pointer[1 : pointer.index(">")]
+    pointer = pointer.split(" ", 1)[0]
+    if pointer.startswith("file://"):
+        pointer = pointer[7:]
+    pointer = re.sub(r":\d+(?::\d+)?$", "", pointer)
+    return pointer
+
+
+def resolve_pointer(
+    pointer: str,
+    base_file: Path,
+    hub: Optional[Path] = None,
+    home: Optional[Path] = None,
+) -> Optional[Path]:
+    if not pointer or _is_placeholder(pointer):
+        return None
+    cleaned = _strip_pointer(pointer)
+    lowered = cleaned.lower()
+    if lowered.startswith(("http://", "https://", "mailto:", "tel:", "#")):
+        return None
+    if not cleaned:
+        return None
+    expanded = Path(os.path.expanduser(cleaned))
+    if expanded.is_absolute():
+        if str(expanded).startswith(("/tmp/", "/private/tmp/", "/var/folders/")):
+            # Runtime scratch paths are never expected to exist at rest.
+            return None
+        return expanded
+    if cleaned.startswith(("./", "../")):
+        return (base_file.parent / expanded).resolve()
+    anchor = cleaned.split("/", 1)[0]
+    anchors: List[Path] = [base_file.parent]
+    if hub is not None:
+        anchors.append(hub)
+    if home is not None:
+        anchors.extend([home, home / "IdeaProjects", home / "ZCodeProject"])
+    if not any((root / anchor).exists() for root in anchors):
+        # A bare relative path only counts as a pointer when its first segment
+        # exists in one of the known roots. Otherwise it is prose about another repo.
+        return None
+    candidates: List[Path] = [
+        (base_file.parent / expanded).resolve(),
+    ]
+    if hub is not None:
+        candidates.append((hub / expanded).resolve())
+    if home is not None:
+        candidates.append((home / expanded).resolve())
+        candidates.append((home / "IdeaProjects" / expanded).resolve())
+        candidates.append((home / "ZCodeProject" / expanded).resolve())
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def redact_secret(value: str) -> str:
+    value = value.strip()
+    if len(value) <= 8:
+        return "***"
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def find_inline_bearers(path: Path) -> List[str]:
+    text = read_text(path, limit=2_000_000)
+    if not text:
+        return []
+    bearers: List[str] = []
+    for match in re.finditer(r"Bearer\s+([A-Za-z0-9._\-]{8,})", text):
+        bearers.append(redact_secret(match.group(1)))
+    return bearers
+
+
+def age_days(path: Path) -> float:
+    try:
+        return max(0.0, (time.time() - path.stat().st_mtime) / 86400.0)
+    except OSError:
+        return 0.0
+
+
+def parse_date(value: str) -> Optional[datetime]:
+    value = (value or "").strip()
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None

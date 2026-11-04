@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guster"
+version = "0.5.3"
+description = "Discover, audit, plan and evolve agent context across projects, skills, tools, knowledge and credentials; optionally scaffold a lightweight Guster Hub for durable knowledge and project state."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Lumos-789" }]
+keywords = ["agent", "context", "governance", "skills", "mcp", "codex", "zcode", "dsh"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+]
+
+[project.scripts]
+guster = "guster.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
