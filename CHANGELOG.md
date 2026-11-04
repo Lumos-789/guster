@@ -2,6 +2,12 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.5.4 — 2026-11-04
+
+- Removed three skill sub-pages that nothing pointed at: `init/SETUP.md`,
+  `use/OPERATE.md`, `test/SELFTEST.md`. `SKILL.md` carries the workflow itself;
+  the sub-pages had drifted and were never loaded.
+
 ## 0.5.3 — 2026-11-04
 
 - `doctor` reports exactly the dimensions that enter CHI for the run's scope.
