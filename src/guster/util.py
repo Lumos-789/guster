@@ -8,7 +8,7 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 
 EXCLUDE_DIRS = {
@@ -100,14 +100,6 @@ def now_iso() -> str:
 
 def today_iso() -> str:
     return datetime.now().astimezone().date().isoformat()
-
-
-def expand_path(value: str, base: Optional[Path] = None) -> Path:
-    raw = os.path.expanduser(os.path.expandvars(value))
-    path = Path(raw)
-    if not path.is_absolute() and base is not None:
-        path = base / path
-    return path
 
 
 def read_text(path: Path, limit: Optional[int] = None) -> str:
@@ -329,20 +321,6 @@ def git_tracked(root: Path) -> Set[str]:
     return tracked
 
 
-def git_status(root: Path) -> str:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "status", "--short"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return result.stdout.strip()
-
-
 def git_last_commit_dates(root: Path) -> Dict[str, str]:
     """Map repo-relative paths to the commit date of their most recent change."""
     if not (root / ".git").exists():
@@ -498,23 +476,6 @@ def resolve_pointer(
         if candidate.exists():
             return candidate
     return candidates[0]
-
-
-def redact_secret(value: str) -> str:
-    value = value.strip()
-    if len(value) <= 8:
-        return "***"
-    return f"{value[:4]}...{value[-4:]}"
-
-
-def find_inline_bearers(path: Path) -> List[str]:
-    text = read_text(path, limit=2_000_000)
-    if not text:
-        return []
-    bearers: List[str] = []
-    for match in re.finditer(r"Bearer\s+([A-Za-z0-9._\-]{8,})", text):
-        bearers.append(redact_secret(match.group(1)))
-    return bearers
 
 
 def age_days(path: Path) -> float:

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .discover import default_hub, default_roots
-from .util import now_iso, read_text, save_json, write_text
+from .util import now_iso, write_text
 
 
 class ApplyError(RuntimeError):
@@ -45,7 +45,7 @@ def preflight(plan: Dict[str, Any]) -> List[str]:
                 errors.append(f"op {index}: destination already exists: {dst}")
             if src == dst:
                 errors.append(f"op {index}: source and destination are identical")
-        elif kind in {"write", "append", "mkdir"}:
+        elif kind in {"write", "mkdir"}:
             value = operation.get("path")
             if not isinstance(value, str) or not value:
                 errors.append(f"op {index}: {kind} needs a string 'path'")
@@ -136,20 +136,6 @@ def apply_plan(
                     shutil.copy2(path, backup)
                     undo.append(("write", {"path": str(path), "backup": str(backup)}))
                 write_text(path, operation.get("content", ""))
-                applied += 1
-            elif kind == "append":
-                path = Path(operation["path"])
-                line = operation.get("line", "")
-                existing = read_text(path, limit=5_000_000)
-                if line in existing.splitlines():
-                    skipped += 1
-                    continue
-                if path.exists():
-                    backup = backup_dir / f"{index:03d}-{path.name}"
-                    shutil.copy2(path, backup)
-                    undo.append(("write", {"path": str(path), "backup": str(backup)}))
-                separator = "" if existing.endswith("\n") or not existing else "\n"
-                write_text(path, existing + separator + line + "\n")
                 applied += 1
             else:
                 raise ApplyError(f"unsupported operation: {kind}")

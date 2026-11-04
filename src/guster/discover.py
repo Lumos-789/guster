@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from . import __version__
 from .layout import resolve_hub_layout
 from .util import (
     EXCLUDE_DIRS,
-    age_days,
-    extract_pointers,
     find_git_roots,
     first_heading,
     git_tracked,
@@ -20,11 +17,9 @@ from .util import (
     iter_files,
     load_json,
     now_iso,
-    parse_date,
     parse_frontmatter,
     read_text,
     relative,
-    resolve_pointer,
     sha256_file,
     sha256_text,
 )
@@ -76,7 +71,6 @@ class ScanConfig:
     state_dir: Path
     plugin_root: Optional[Path] = None
     max_depth: int = 5
-    include_company: bool = True
     scope: str = "machine"
     now: str = field(default_factory=now_iso)
 
@@ -246,7 +240,6 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
                 root=root,
                 group=root.parent.name,
                 tracked=tracked,
-                hub=hub,
                 now=config.now,
             )
         )
@@ -256,10 +249,10 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
 
     artifacts: List[Dict[str, Any]] = []
     if scope != "hub":
-        artifacts.extend(scan_project_agents(projects, index_texts, now=config.now))
-    artifacts.extend(scan_hub_knowledge(hub, index_texts, now=config.now))
+        artifacts.extend(scan_project_agents(projects, index_texts, project_tracked))
+    artifacts.extend(scan_hub_knowledge(hub, index_texts))
     if scope != "hub":
-        artifacts.extend(scan_local_wiki(home, index_texts, now=config.now))
+        artifacts.extend(scan_local_wiki(home, index_texts))
     artifacts = dedupe_artifacts(artifacts)
     scoped = scope_roots(config)
     if scoped is not None:
@@ -278,7 +271,6 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
     )
     credential_registry = scan_credential_registry(home)
     inline_bearers = scan_inline_bearers(home) if scope != "hub" else []
-    hosts = scan_hosts(home) if scope != "hub" else []
     governance_docs = find_governance_docs(home, hub)
     if scope == "hub" and hub:
         governance_docs = [
@@ -306,7 +298,6 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
             "inline_bearers": inline_bearers,
             "registry": credential_registry,
         },
-        "hosts": hosts,
         "governance_docs": governance_docs,
         "plugin_manifests": manifests,
         "summary": summarize(
@@ -341,7 +332,6 @@ def scan_project(
     root: Path,
     group: str,
     tracked: Set[str],
-    hub: Optional[Path],
     now: str,
 ) -> Dict[str, Any]:
     agent_files = find_agent_files(root, max_depth=3)
@@ -457,7 +447,6 @@ def artifact_record(
     scope: str,
     project_id: Optional[str],
     indexed: Optional[bool],
-    now: str,
     tracked: Optional[Set[str]] = None,
     base: Optional[Path] = None,
 ) -> Dict[str, Any]:
@@ -499,16 +488,16 @@ def artifact_record(
 def scan_project_agents(
     projects: Sequence[Dict[str, Any]],
     index_texts: Dict[str, str],
-    now: str,
+    project_tracked: Dict[str, Set[str]],
 ) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for project in projects:
         root = Path(project["path"])
-        tracked = git_tracked(root)
+        tracked = project_tracked.get(project["path"], set())
         for agent_rel in project.get("agent_files", []):
             path = root / agent_rel
             records.append(
-                artifact_record(path, "instruction", "instruction", "project", project["id"], None, now, tracked, root)
+                artifact_record(path, "instruction", "instruction", "project", project["id"], None, tracked, root)
             )
         agents_dir = project.get("agents_dir")
         if not agents_dir:
@@ -519,7 +508,7 @@ def scan_project_agents(
         if index_path.is_file() and not index_path.is_symlink():
             records.append(
                 artifact_record(
-                    index_path, "instruction", "instruction", "project", project["id"], None, now, tracked, root
+                    index_path, "instruction", "instruction", "project", project["id"], None, tracked, root
                 )
             )
         for slot, kind, plane in (
@@ -543,20 +532,7 @@ def scan_project_agents(
                     continue
                 indexed = path.name in index_text if kind == "knowledge" else None
                 records.append(
-                    artifact_record(path, kind, plane, "project", project["id"], indexed, now, tracked, root)
-                )
-        for entry in project.get("agents_entries", []):
-            if entry in STANDARD_AGENTS_SLOTS or entry in {"README.md", "AGENTS.md"}:
-                continue
-            entry_path = agents_path / entry
-            if entry_path.is_dir():
-                for path in iter_files(entry_path, suffixes={".md", ".json", ".yaml", ".yml"}):
-                    records.append(
-                        artifact_record(path, "unclassified", "unknown", "project", project["id"], None, now, tracked, root)
-                    )
-            elif entry_path.is_file() and entry_path.suffix.lower() in {".md", ".json", ".yaml", ".yml"}:
-                records.append(
-                    artifact_record(entry_path, "unclassified", "unknown", "project", project["id"], None, now, tracked, root)
+                    artifact_record(path, kind, plane, "project", project["id"], indexed, tracked, root)
                 )
     return records
 
@@ -564,7 +540,6 @@ def scan_project_agents(
 def scan_hub_knowledge(
     hub: Optional[Path],
     index_texts: Dict[str, str],
-    now: str,
 ) -> List[Dict[str, Any]]:
     if not hub:
         return []
@@ -576,7 +551,7 @@ def scan_hub_knowledge(
     if knowledge_index_path.is_file():
         records.append(
             artifact_record(
-                knowledge_index_path, "instruction", "instruction", "project", None, None, now, tracked, hub
+                knowledge_index_path, "instruction", "instruction", "project", None, None, tracked, hub
             )
         )
     default_suffixes = {".md", ".json", ".yaml", ".yml"}
@@ -603,19 +578,19 @@ def scan_hub_knowledge(
             if check_index and kind == "knowledge":
                 indexed = path.name in knowledge_index
             records.append(
-                artifact_record(path, kind, plane, scope, None, indexed, now, tracked, hub)
+                artifact_record(path, kind, plane, scope, None, indexed, tracked, hub)
             )
     strategy = hub / "strategy.md"
     if strategy.is_file():
         records.append(
             artifact_record(
-                strategy, "state", "state", "project", None, None, now, tracked, hub
+                strategy, "state", "state", "project", None, None, tracked, hub
             )
         )
     for path in iter_files(layout["tools"], suffixes={".md"}, max_depth=3):
         if path.name in {"AGENTS.md", "README.md"}:
             records.append(
-                artifact_record(path, "tool", "capability", "project", None, None, now, tracked, hub)
+                artifact_record(path, "tool", "capability", "project", None, None, tracked, hub)
             )
     return records
 
@@ -623,7 +598,6 @@ def scan_hub_knowledge(
 def scan_local_wiki(
     home: Path,
     index_texts: Dict[str, str],
-    now: str,
 ) -> List[Dict[str, Any]]:
     root = home / ".agents" / "wiki"
     if not root.is_dir():
@@ -642,7 +616,6 @@ def scan_local_wiki(
                 "local",
                 None,
                 path.name in index_text,
-                now,
             )
         )
     return records
@@ -833,85 +806,6 @@ def scan_inline_bearers(home: Path) -> List[Dict[str, Any]]:
     return records
 
 
-def scan_hosts(home: Path) -> Dict[str, Any]:
-    hosts: Dict[str, Any] = {}
-    codex_home = home / ".codex"
-    summary = codex_home / "memories" / "memory_summary.md"
-    codex_config = codex_home / "config.toml"
-    hosts["codex"] = {
-        "home": str(codex_home),
-        "config": str(codex_config) if codex_config.is_file() else None,
-        "memory_summary_lines": count_lines(summary),
-        "memory_summary_bytes": file_size(summary),
-        "mcp_servers": count_codex_mcp(codex_config),
-    }
-    zcode_home = home / ".zcode"
-    zcode_config = zcode_home / "cli" / "config.json"
-    zcode_mem = zcode_home / "cli" / "memories" / "projects"
-    hosts["zcode"] = {
-        "home": str(zcode_home),
-        "config": str(zcode_config) if zcode_config.is_file() else None,
-        "memory_files": count_files(zcode_mem),
-        "memory_bytes": tree_size(zcode_mem),
-        "mcp_servers": count_zcode_mcp(zcode_config),
-    }
-    dsh_home = home / ".dsh"
-    dsh_config = dsh_home / "cordis.patch.yml"
-    hosts["dsh"] = {
-        "home": str(dsh_home),
-        "config": str(dsh_config) if dsh_config.is_file() else None,
-        "mcp_servers": count_dsh_mcp(dsh_config),
-    }
-    return hosts
-
-
-def count_lines(path: Path) -> int:
-    text = read_text(path, limit=5_000_000)
-    return len(text.splitlines()) if text else 0
-
-
-def file_size(path: Path) -> int:
-    try:
-        return path.stat().st_size
-    except OSError:
-        return 0
-
-
-def count_files(root: Path) -> int:
-    if not root.is_dir():
-        return 0
-    return sum(1 for path in root.rglob("*") if path.is_file())
-
-
-def tree_size(root: Path) -> int:
-    if not root.is_dir():
-        return 0
-    total = 0
-    for path in root.rglob("*"):
-        if path.is_file():
-            try:
-                total += path.stat().st_size
-            except OSError:
-                pass
-    return total
-
-
-def count_codex_mcp(path: Path) -> int:
-    text = read_text(path, limit=1_000_000)
-    return len(re.findall(r"^\[mcp_servers\.([^\]]+)\]", text, re.MULTILINE))
-
-
-def count_zcode_mcp(path: Path) -> int:
-    data = load_json(path, {})
-    servers = data.get("mcp", {}).get("servers", {}) if isinstance(data, dict) else {}
-    return len(servers) if isinstance(servers, dict) else 0
-
-
-def count_dsh_mcp(path: Path) -> int:
-    text = read_text(path, limit=1_000_000)
-    return len(re.findall(r"^\s*-\s*id:\s*mcp-", text, re.MULTILINE))
-
-
 def find_governance_docs(home: Path, hub: Optional[Path]) -> List[str]:
     # Framework docs, not topic authorities. A doc that labels itself a facet
     # ("分册") belongs to the primary framework and does not compete with it.
@@ -996,7 +890,6 @@ def summarize(
         "knowledge": sum(1 for item in artifacts if item.get("kind") == "knowledge"),
         "state": sum(1 for item in artifacts if item.get("kind") == "state"),
         "evidence": sum(1 for item in artifacts if item.get("kind") == "evidence"),
-        "unclassified": sum(1 for item in artifacts if item.get("kind") == "unclassified"),
         "secret_files": len(secret_files),
         "secret_outside_root": sum(1 for item in secret_files if not item.get("canonical")),
         "secret_in_git": sum(1 for item in secret_files if item.get("git_tracked")),

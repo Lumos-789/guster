@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
-from .util import human_bytes, now_iso, save_json, write_text
+from .util import human_bytes, now_iso
 
 
 SEVERITY_LABEL = {
@@ -104,12 +103,11 @@ def render_report(
             continue
         lines.append(f"| {label} | {value} | {score} | {detail} |")
     lines.append("")
-    if "gcr" not in dims:
-        lines.append(
-            f"_Not counted in CHI: Governance simplicity {metrics.get('gcr')} "
-            f"(score {scores.get('gcr')}, {raw.get('governance_docs', 0)} docs)._"
-        )
-        lines.append("")
+    lines.append(
+        f"_Not counted in CHI: Governance simplicity {metrics.get('gcr')} "
+        f"(score {scores.get('gcr')}, {raw.get('governance_docs', 0)} docs)._"
+    )
+    lines.append("")
     lines.append("## Findings")
     lines.append("")
     if not findings:
@@ -200,10 +198,3 @@ def redacted_registry(registry: Dict[str, Any]) -> Dict[str, Any]:
 
     return scrub(registry)
 
-
-def write_report(path: Path, text: str) -> None:
-    write_text(path, text)
-
-
-def write_json(path: Path, data: Any) -> None:
-    save_json(path, data)

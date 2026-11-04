@@ -61,7 +61,10 @@ Rules:
 7. `guster apply <plan> --yes`
 8. `guster score --trend`
 
-All workspace writes are gated behind a plan and `--yes`.
+Workspace writes are gated behind a plan and `--yes`. Reading is not fully
+read-only: every scanning command refreshes `~/.agents/guster/registry.json`,
+`doctor` also writes `findings.json`, and `score` appends `metrics.jsonl`.
+`--no-write` skips that command's own state file for `scan`, `doctor` and `score`.
 
 ## Commands
 
@@ -119,12 +122,14 @@ tracked files, host limitations), not to skip ordinary work.
 
 - `reference/framework.md` — 1-3-5-8 framework and placement tree.
 - `reference/metrics.md` — metric definitions, targets and CHI.
-- `reference/placement.md` — the eight planes and `.agents/` slots.
+- `reference/placement.md` — user/hub/project directory trees and the git boundary.
 
 ## Exit codes
 
-- `0`: success; no critical/high findings for `doctor`.
-- `2`: high findings, or plan/apply refused.
-- `3`: critical findings.
-- `4`: apply/init failed.
-- `1`: tool error.
+- `0`: success (including `doctor` with no high/critical findings).
+- `1`: tool error — unreadable or malformed plan, missing workspace root, unreadable
+  or non-object config; `hub status` also returns 1 when the hub is invalid.
+- `2`: `doctor` found high (but no critical) findings; `hub validate` failed the
+  lite contract; `link` found broken pointers; `upgrade` found disagreeing versions.
+- `3`: `doctor` found critical findings.
+- `4`: `apply`, `init` or `hub init` could not apply the plan (preflight errors, or `FAILED`).

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -21,8 +20,8 @@ from .planner import (
     save_plan,
 )
 from .policy import run_policy
-from .report import redacted_registry, render_report, render_status, write_json, write_report
-from .util import human_bytes, json_dumps, load_json, now_iso, save_json
+from .report import redacted_registry, render_report, render_status
+from .util import json_dumps, load_json, now_iso, save_json, write_text
 
 
 def default_state_dir(home: Path) -> Path:
@@ -289,8 +288,6 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 print(f"  {index}. mkdir {operation['path']}")
             elif kind == "write":
                 print(f"  {index}. write {operation['path']}")
-            elif kind == "append":
-                print(f"  {index}. append {operation['path']}")
             elif kind == "manual":
                 print(f"  {index}. manual {operation['path']}: {operation['action']}")
         print("review the plan; apply with `guster apply <plan> --yes`.")
@@ -476,10 +473,10 @@ def cmd_export(args: argparse.Namespace) -> int:
     result = evaluate(registry, config)
     report = render_report(registry, result["policy"], result["metrics"])
     out = Path(args.out).expanduser() if args.out else config.state_dir / "context-health.md"
-    write_report(out, report)
+    write_text(out, report)
     if args.format == "json":
         json_out = out.with_suffix(".json")
-        write_json(json_out, {
+        save_json(json_out, {
             "registry": redacted_registry(registry),
             "policy": result["policy"],
             "metrics": result["metrics"],
@@ -561,7 +558,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = subparsers.add_parser("doctor", parents=[common], help="Run policy checks.")
     doctor.add_argument("--no-write", action="store_true", help="Do not write findings.json.")
-    doctor.add_argument("--strict", action="store_true", help="Return non-zero on high severity (default already does).")
     doctor.set_defaults(func=cmd_doctor)
 
     score = subparsers.add_parser("score", parents=[common], help="Compute metrics and CHI.")

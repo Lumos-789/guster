@@ -32,6 +32,12 @@
       "patch": "./cordis.patch.yml"
     }
   },
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.0-rc.6 <0.3.0"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

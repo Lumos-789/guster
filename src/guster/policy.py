@@ -3,18 +3,16 @@ from __future__ import annotations
 import glob
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from .discover import ScanConfig, STANDARD_AGENTS_SLOTS, in_scope_path, scope_roots
 from .layout import load_waivers, resolve_hub_layout
 from .util import (
     age_days,
     extract_pointers,
-    first_heading,
     git_last_commit_dates,
-    is_under,
     parse_date,
     read_text,
     relative,
@@ -45,10 +43,6 @@ def finding(
         "suggestion": suggestion,
         "evidence": evidence or {},
     }
-
-
-def add_findings(findings: List[Dict[str, Any]], items: Iterable[Dict[str, Any]]) -> None:
-    findings.extend(items)
 
 
 def suggest_slot(name: str, is_dir: bool) -> str:
@@ -424,7 +418,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     {"pointers": broken[:10]},
                 )
             )
-    add_findings(findings, broken_by_file[:100])
+    findings.extend(broken_by_file[:100])
 
     # Secrets
     secret_data = registry.get("secrets", {})
@@ -584,25 +578,6 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                 f"{len(tmp_old)} file(s) in .agents/tmp are older than 14 days.",
                 "Archive what matters and delete the rest; tmp is not a knowledge store.",
                 {"count": len(tmp_old), "examples": tmp_old[:10]},
-            )
-        )
-
-    evidence_in_plans: List[str] = []
-    for item in artifacts:
-        if not item.get("rel", "").startswith(".agents/plans/"):
-            continue
-        if Path(item["path"]).suffix.lower() in MEDIA_SUFFIXES:
-            evidence_in_plans.append(item["path"])
-    if evidence_in_plans:
-        findings.append(
-            finding(
-                "evidence-in-plans",
-                "low",
-                "Media evidence is stored under plans",
-                evidence_in_plans[0],
-                f"{len(evidence_in_plans)} media file(s) are under .agents/plans.",
-                "Move media to .agents/evidence/ and leave only the plan/summary in plans.",
-                {"count": len(evidence_in_plans), "examples": evidence_in_plans[:10]},
             )
         )
 

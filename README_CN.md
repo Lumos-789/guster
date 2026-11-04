@@ -85,7 +85,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 它们记录在 `hub.yaml` 的 `paths` 下，之后也可以修改。路径必须是 Hub 内的相对路径。
 
-完整 Hub 使用 `profile: full`，扫描范围包括 knowledge、projects、handoff、reports、`Human Output`、provision、tools、manuals、cron-tasks、OpenSpec、archive 和 `strategy.md`。`out/`、`.manual-site/`、`.playwright-mcp/`、`.codegraph/` 等生成物或运行态不作为知识源。`--scope hub` 只算 Hub；本地 wiki 和机器级凭据归机器范围。
+扫描按目录是否存在走，不是开关：`hub.yaml` 里的 `profile` 只是标签。Hub 只要有 knowledge 根（其下的 `general/`、`projects/`、`workgroups/`）、配置的项目状态根、`handoff/`、`provision/`、`reports/`、`Human Output/`、`manuals/`、`cron-tasks/`、`openspec/`、`archive/`、`.agents/plans/` 和 `strategy.md`，就会被扫到。`out/`、`.manual-site/`、`.playwright-mcp/`、`.codegraph/` 等生成物或运行态不作为知识源。`--scope hub` 只算 Hub；本地 wiki 和机器级凭据归机器范围。
 
 ## 健康模型
 
@@ -98,8 +98,9 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 - **RBR** 常驻预算比
 - **PCR** 落位合规率
 - **ICR** 索引覆盖率
-- **FRS** 状态新鲜度：状态平面文档（Hub 项目卡、handoff、provision 记录以及
-  `.agents/plans/*`）中在 90 天 SLA 内核实过的比例。日期依次取自 `verified_at`、
+- **FRS** 状态新鲜度：Hub 项目卡目录（`projects/`）、`handoff/`、`provision/`
+  与 `.agents/plans/` 四类状态文档中在 90 天 SLA 内核实过的比例；分母只认这四个
+  前缀，Hub `reports/` 或机器级笔记不算状态文档。日期依次取自 `verified_at`、
   正文或前置元数据中的 `最后更新`、文件名中的 8 位日期，或该文档所属仓库的最后
   一次 git 提交。
 - **PHR** 指针健康率
@@ -142,7 +143,8 @@ Guster 读取 `~/.agents/credentials/registry.md`，并对照它检查发现的�
 
 ## 安全边界
 
-- 默认只读；只有 `apply`、`init --yes`、`hub init --yes` 和 `hub attach` 会写工作区或配置。
+- 默认不写工作区：只有 `apply --yes`、`init --yes`、`hub init --yes` 和 `hub attach` 会自行改动工作区文件或 Guster 配置；`export --out <path>` 只写你指定的报告路径。
+- Guster 会在状态目录（`~/.agents/guster/` 或 `scoped/<hash>/`）维护三个状态文件：所有扫描类命令都会重写 `registry.json`（`status` 在没有 registry 时也会写），`doctor` 另写 `findings.json`，`score` 追加 `metrics.jsonl`。`--no-write` 只对 `scan`、`doctor`、`score` 关闭本命令的状态文件。
 - 永不持久化或输出凭据值；扫描只保留路径和脱敏形态。
 - 不自动 `git add` / `commit` / `push` / 部署。
 - 公司/公共仓 tracked 文件不是普通迁移目标。

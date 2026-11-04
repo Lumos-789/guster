@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
-from .util import now_iso, relative, save_json, slugify
+from .util import now_iso, save_json, slugify
 
 
 def new_plan_id(title: str) -> str:
@@ -31,31 +31,25 @@ def op_mkdir(path: Path) -> Dict[str, Any]:
 def op_move(
     src: Path,
     dst: Path,
-    project_root: Optional[Path] = None,
     pointer: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     return {
         "kind": "move",
         "src": str(src),
         "dst": str(dst),
-        "project_root": str(project_root) if project_root else None,
         "pointer": pointer or None,
     }
 
 
-def op_write(path: Path, content: str, mode: str = "create") -> Dict[str, Any]:
-    return {"kind": "write", "path": str(path), "content": content, "mode": mode}
-
-
-def op_append(path: Path, line: str) -> Dict[str, Any]:
-    return {"kind": "append", "path": str(path), "line": line}
+def op_write(path: Path, content: str) -> Dict[str, Any]:
+    return {"kind": "write", "path": str(path), "content": content}
 
 
 def op_manual(path: str, action: str, reason: str) -> Dict[str, Any]:
     return {"kind": "manual", "path": path, "action": action, "reason": reason}
 
 
-def plan_move(src: Path, dst: Path, project_root: Optional[Path] = None) -> Dict[str, Any]:
+def plan_move(src: Path, dst: Path) -> Dict[str, Any]:
     if not src.exists():
         raise FileNotFoundError(f"source does not exist: {src}")
     if dst.exists():
@@ -65,7 +59,6 @@ def plan_move(src: Path, dst: Path, project_root: Optional[Path] = None) -> Dict
         op_move(
             src,
             dst,
-            project_root,
             pointer={
                 "path": str(src.parent / f"{src.name}.moved.md"),
                 "content": f"# Moved\n\nThis path moved to `{dst}`.\n",

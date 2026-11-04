@@ -115,10 +115,8 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
     manifest = load_manifest(hub / "hub.yaml")
     try:
         layout = resolve_hub_layout(hub)
-        layout_error = None
     except ValueError as exc:
         layout = {key: (hub / value).resolve() for key, value in DEFAULT_PATHS.items()}
-        layout_error = str(exc)
         errors.append(f"invalid hub layout: {exc}")
 
     legacy = (
@@ -208,7 +206,6 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
         "manifest": manifest,
         "paths": {key: _relative(value, hub) for key, value in layout.items()},
         "profile": manifest.get("profile") or ("legacy" if legacy else ""),
-        "layout_error": layout_error,
         "errors": errors,
         "warnings": warnings,
         "plugin": __version__,

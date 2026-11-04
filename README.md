@@ -85,7 +85,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 They are recorded in `hub.yaml` under `paths` and can be changed later. Paths must be relative to the Hub and must stay inside it.
 
-A full Hub uses `profile: full` and is scanned across knowledge, projects, handoff, reports, `Human Output`, provision, tools, manuals, cron tasks, OpenSpec changes, archive and `strategy.md`. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
+Scanning follows the directories that exist, not a mode: `profile` in `hub.yaml` is only a label. A hub is scanned across its knowledge root (`general/`, `projects/` and `workgroups/` under it), the configured project state root, `handoff/`, `provision/`, `reports/`, `Human Output/`, `manuals/`, `cron-tasks/`, `openspec/`, `archive/`, `.agents/plans/` and `strategy.md` whenever those exist. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
 
 ## Health model
 
@@ -98,11 +98,12 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 - **RBR** resident budget ratio
 - **PCR** placement compliance rate
 - **ICR** index coverage rate
-- **FRS** state freshness rate: share of documents on the state plane (hub
-  project cards, handoffs, provision records and `.agents/plans/*`) that were
-  verified within the 90-day SLA. The date comes from `verified_at`, a
-  `最后更新` line, an 8-digit date in the filename, or the last git commit of
-  the repository that owns the document.
+- **FRS** state freshness rate: share of state documents under the hub's
+  project root (`projects/`), `handoff/`, `provision/` and `.agents/plans/`
+  that were verified within the 90-day SLA. The denominator is those four
+  prefixes only — a hub `reports/` file or a machine-level note is not state.
+  The date comes from `verified_at`, a `最后更新` line, an 8-digit date in the
+  filename, or the last git commit of the repository that owns the document.
 - **PHR** pointer health rate
 - **SIR** secret isolation rate
 
@@ -153,7 +154,8 @@ It never holds values. `guster credentials` prints the split.
 
 ## Safety
 
-- Read-only by default. `apply`, `init --yes`, `hub init --yes` and `hub attach` are the only writers.
+- Read-only on your workspace by default. `apply --yes`, `init --yes`, `hub init --yes` and `hub attach` are the only commands that change workspace files or Guster config on their own; `export --out <path>` writes the report path you name.
+- Guster keeps three state files under its state directory (`~/.agents/guster/`, or `scoped/<hash>/`): `registry.json`, which every scanning command rewrites (`status` included, when no registry exists yet), plus `findings.json` from `doctor` and `metrics.jsonl` from `score`. `--no-write` suppresses the state file of `scan`, `doctor` and `score` only.
 - Credential values are never persisted or printed; scans keep only paths and redacted shapes.
 - No automatic `git add`, `commit`, `push` or deploy.
 - Company/public repository tracked files are not ordinary migration targets.

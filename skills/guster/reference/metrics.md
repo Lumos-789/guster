@@ -15,8 +15,11 @@
 
 ## Targets
 
-- Resident: ≤20 KB per end; skills ≤6,000 characters total, ≤500 per item.
-- State: active project 30 days, handoff 7 days, environment 90 days.
+- Resident: one ≤20 KB budget for the user and hub instruction files together
+  (they are summed, not budgeted per end); soft line budgets are 150 user / 50 hub.
+- Skills: ≤6,000 characters of description in total, ≤500 per skill.
+- State: one 90-day SLA for every state document — hub `projects/`, `handoff/`,
+  `provision/` and `.agents/plans/`. There is no separate 7- or 30-day tier.
 - Knowledge: index every durable file; review every 90–180 days.
 - Secrets: 0 in git; 1 canonical root; 0 inline tokens.
 

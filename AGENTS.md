@@ -19,7 +19,8 @@ This repository is the distributable Guster plugin: the control plane for agent 
 
 ## Boundaries
 
-- Default to read-only. `apply`, `init --yes`, `hub init --yes` and `hub attach` are the only writers.
+- Default to read-only on the workspace. `apply --yes`, `init --yes`, `hub init --yes` and `hub attach` are the only writers of workspace files and Guster config; `export --out <path>` writes the report path you name.
+- Scanning commands also maintain state under `~/.agents/guster/` (`scoped/<hash>/` for scoped runs): every one of them rewrites `registry.json`, `doctor` writes `findings.json`, `score` appends `metrics.jsonl`. `--no-write` opts out of the command's own state file for `scan`, `doctor` and `score` only.
 - Never read or print credential values. Paths and redacted forms only.
 - Never auto-commit, auto-push or deploy.
 - Keep Codex, ZCode and package versions synchronized.

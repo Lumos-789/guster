@@ -11,7 +11,6 @@ DEFAULT_PATHS = {
     "projects": "projects",
     "tools": "tools",
 }
-PATH_KEYS = tuple(DEFAULT_PATHS)
 
 
 def load_manifest(path: Path) -> Dict[str, Any]:

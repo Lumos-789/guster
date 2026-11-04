@@ -888,7 +888,7 @@ class GusterCoreTests(unittest.TestCase):
         (wiki / "api-alias.md").symlink_to(wiki / "code-standards" / "api.md")
         names = [
             Path(item["path"]).name
-            for item in scan_local_wiki(self.fx.home, {}, "2026-11-03T00:00:00+08:00")
+            for item in scan_local_wiki(self.fx.home, {})
         ]
         self.assertIn("api.md", names)
         self.assertNotIn("api-alias.md", names)

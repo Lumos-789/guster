@@ -4,7 +4,8 @@ Notable changes. Earlier history is in `git log`.
 
 ## 0.5.5 — 2026-11-05
 
-- FRS now counts every document on the state plane, not only `kind: state`.
+- FRS now counts state documents under the hub project root (`projects/`),
+  `handoff/`, `provision/` and `.agents/plans/`, not only `kind: state`.
   Project `.agents/plans/*` therefore enters the FRS denominator, so a project
   or group with a stale plan loses freshness points instead of reporting
   `100.0 (0/0)`. Plans use the existing 90-day rule: a declared

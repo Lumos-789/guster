@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .util import now_iso
 
@@ -157,14 +156,6 @@ def compute_metrics(registry: Dict[str, Any], policy_result: Dict[str, Any]) -> 
 
 def metric_line(result: Dict[str, Any]) -> str:
     scores = result.get("scores", {})
-    dims = result.get("dims")
-    if dims:
-        parts = [f"CHI {result.get('chi')} ({result.get('scope')})"]
-        parts += [f"{dim.upper()} {scores.get(dim)}" for dim in dims]
-        return " | ".join(parts)
-    return (
-        f"CHI {result.get('chi')} | "
-        f"SSR {scores.get('ssr')} | RBR {scores.get('rbr')} | "
-        f"PCR {scores.get('pcr')} | ICR {scores.get('icr')} | "
-        f"FRS {scores.get('frs')} | PHR {scores.get('phr')} | SIR {scores.get('sir')}"
-    )
+    parts = [f"CHI {result.get('chi')} ({result.get('scope')})"]
+    parts += [f"{dim.upper()} {scores.get(dim)}" for dim in result.get("dims") or []]
+    return " | ".join(parts)

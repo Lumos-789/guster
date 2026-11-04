@@ -20,7 +20,7 @@ It does **not** ship `handoff/` or `reports/`. Add those later only when the wor
 
 The three core roots default to `knowledge/`, `projects/` and `tools/`, but they are configurable. They live in `hub.yaml` under `paths`.
 
-An existing fuller hub may use `profile: full`. The scanner then also covers `handoff/`, `reports/`, `Human Output/`, `provision/`, `manuals/`, `cron-tasks/`, `openspec/`, `archive/` and `strategy.md` when present. Generated directories such as `out/` are not knowledge sources. `--scope hub` excludes local wiki and machine-level secrets.
+There is no mode switch: the scanner follows the directories that exist, and `profile` in `hub.yaml` is only a label. A fuller hub is also scanned across `handoff/`, `reports/`, `Human Output/`, `provision/`, `manuals/`, `cron-tasks/`, `openspec/`, `archive/`, `.agents/plans/`, `strategy.md` and `knowledge/workgroups/` when present. Generated directories such as `out/` are not knowledge sources. `--scope hub` excludes local wiki and machine-level secrets.
 
 ## Workflow
 
