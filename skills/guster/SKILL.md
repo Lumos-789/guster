@@ -73,6 +73,7 @@ guster status
 guster scan --root ~/Projects --json
 guster doctor
 guster score --write --trend
+guster score --fail-under 80   # optional gate: exit 2 when CHI is below the target
 guster plan findings
 guster plan move --from <src> --to <dst>
 guster plan init --project <path>
