@@ -61,6 +61,16 @@ INLINE_CONFIG_FILES = [
     "~/.zcode/cli/config.json",
     "~/.dsh/cordis.patch.yml",
 ]
+INLINE_PATTERNS = [
+    # Host configs carry tokens in more shapes than one: keep the detector
+    # narrow enough to stay quiet, broad enough not to miss a literal key.
+    r"\bBearer\s+([A-Za-z0-9._\-]{8,})",
+    r"\bsk-[A-Za-z0-9]{16,}",
+    r"(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?key)"
+    r"\s*[:=]\s*[\"']?([A-Za-z0-9._\-]{16,})",
+]
+SECRET_ENV_DEPTH = 2
+HASH_LIMIT = 8_000_000
 
 
 @dataclass
@@ -146,13 +156,14 @@ def derive_topics(
     skills: Sequence[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Group knowledge into facts and report the ones with more than one home."""
-    knowledge = [
+    knowledge_all = [
         item
         for item in artifacts
         if item.get("kind") == "knowledge"
-        and item.get("hash")
         and Path(item["path"]).name.lower() not in {"readme.md", "agents.md"}
     ]
+    knowledge = [item for item in knowledge_all if item.get("hash")]
+    unhashed = sum(1 for item in knowledge_all if not item.get("hash"))
     consumed: Set[str] = set()
     topics: List[Dict[str, Any]] = []
 
@@ -207,6 +218,7 @@ def derive_topics(
         "total": len(topics),
         "multi": len(multi),
         "multi_topics": multi,
+        "unhashed": unhashed,
     }
 
 
@@ -231,7 +243,7 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
             known.add(resolved)
 
     projects: List[Dict[str, Any]] = []
-    project_tracked: Dict[str, Set[str]] = {}
+    project_tracked: Dict[str, Optional[Set[str]]] = {}
     for root in sorted(project_roots, key=lambda item: str(item)):
         tracked = git_tracked(root)
         project_tracked[str(root)] = tracked
@@ -331,7 +343,7 @@ def has_project_marker(root: Path) -> bool:
 def scan_project(
     root: Path,
     group: str,
-    tracked: Set[str],
+    tracked: Optional[Set[str]],
     now: str,
 ) -> Dict[str, Any]:
     agent_files = find_agent_files(root, max_depth=3)
@@ -347,7 +359,7 @@ def scan_project(
         except OSError:
             agents_entries = []
         standard_slots = [slot for slot in STANDARD_AGENTS_SLOTS if (agents_dir / slot).exists()]
-        has_index = (agents_dir / "README.md").exists() or (agents_dir / "AGENTS.md").exists()
+        has_index = agents_index_present(agents_dir)
 
     status = "unknown"
     for agent_file in agent_files:
@@ -372,8 +384,21 @@ def scan_project(
         "tools": find_project_tools(root),
         "status": status,
         "last_scan": now,
-        "tracked_count": len(tracked),
+        "git_state": "ok" if tracked is not None else "error",
+        "tracked_count": len(tracked) if tracked is not None else None,
     }
+
+
+def agents_index_present(agents_dir: Path) -> bool:
+    """An index must have content; an empty placeholder indexes nothing."""
+    for name in ("README.md", "AGENTS.md"):
+        path = agents_dir / name
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def unique_project_id(name: str, root: Path) -> str:
@@ -459,8 +484,11 @@ def artifact_record(
         size = path.stat().st_size
     except OSError:
         pass
-    tracked_flag = False
-    if tracked is not None and base is not None:
+    tracked_flag: Optional[bool] = False
+    if tracked is None:
+        # Unknown is not "untracked": a failed git probe must stay visible.
+        tracked_flag = None
+    elif base is not None:
         try:
             tracked_flag = str(path.resolve().relative_to(base.resolve())) in tracked
         except (OSError, ValueError):
@@ -474,7 +502,7 @@ def artifact_record(
         "project": project_id,
         "size": size,
         "mtime": path.stat().st_mtime if path.exists() else 0,
-        "hash": sha256_file(path) if size <= 2_000_000 else "",
+        "hash": sha256_file(path) if size <= HASH_LIMIT else "",
         "frontmatter": frontmatter,
         "title": first_heading(body if text else "", path.stem),
         "indexed": indexed,
@@ -488,7 +516,7 @@ def artifact_record(
 def scan_project_agents(
     projects: Sequence[Dict[str, Any]],
     index_texts: Dict[str, str],
-    project_tracked: Dict[str, Set[str]],
+    project_tracked: Dict[str, Optional[Set[str]]],
 ) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for project in projects:
@@ -687,11 +715,35 @@ def scan_skills(home: Path) -> List[Dict[str, Any]]:
     return skills
 
 
+def find_env_files(root: Path, max_depth: int = SECRET_ENV_DEPTH) -> List[Path]:
+    """`.env` files under a project, bounded by depth so the scan stays cheap."""
+    found: List[Path] = []
+    stack: List[Tuple[Path, int]] = [(root, 0)]
+    while stack:
+        current, depth = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_file() and entry.name == ".env":
+                found.append(entry)
+            elif (
+                entry.is_dir()
+                and depth < max_depth
+                and not entry.name.startswith(".")
+                and entry.name not in EXCLUDE_DIRS
+                and not entry.is_symlink()
+            ):
+                stack.append((entry, depth + 1))
+    return sorted(found)
+
+
 def scan_secret_files(
     home: Path,
     hub: Optional[Path],
     projects: Sequence[Dict[str, Any]],
-    project_tracked: Dict[str, Set[str]],
+    project_tracked: Dict[str, Optional[Set[str]]],
     include_home: bool = True,
 ) -> List[Dict[str, Any]]:
     candidates: List[Path] = []
@@ -710,11 +762,7 @@ def scan_secret_files(
                 if path.name in SECRET_SUFFIX_NAMES or path.name.startswith("credentials.") or path.name.endswith(".local.json"):
                     candidates.append(path)
     for project in projects:
-        root = Path(project["path"])
-        for depth_root in [root] + [path for path in root.iterdir() if path.is_dir() and not path.name.startswith(".")]:
-            env_path = depth_root / ".env"
-            if env_path.is_file():
-                candidates.append(env_path)
+        candidates.extend(find_env_files(Path(project["path"])))
 
     seen: Set[str] = set()
     records: List[Dict[str, Any]] = []
@@ -727,16 +775,24 @@ def scan_secret_files(
             continue
         seen.add(resolved)
         canonical = is_under(path, home / ".agents" / "credentials")
-        tracked = False
+        tracked: Optional[bool] = None
         for project in projects:
             project_root = Path(project["path"])
-            if is_under(path, project_root):
+            if not is_under(path, project_root):
+                continue
+            tracked_set = project_tracked.get(str(project_root))
+            if tracked_set is None:
+                tracked = None
+            else:
                 try:
                     rel = str(path.resolve().relative_to(project_root.resolve()))
                 except ValueError:
                     rel = ""
-                tracked = rel in project_tracked.get(str(project_root), set())
-                break
+                tracked = rel in tracked_set
+            break
+        if tracked is None and not any(is_under(path, Path(p["path"])) for p in projects):
+            # Outside every scanned repository there is nothing that could track it.
+            tracked = False
         records.append(
             {
                 "path": str(path),
@@ -797,10 +853,13 @@ def scan_inline_bearers(home: Path) -> List[Dict[str, Any]]:
         if not path.is_file():
             continue
         text = read_text(path, limit=2_000_000)
-        values = []
-        for match in re.finditer(r"Bearer\s+([A-Za-z0-9._\-]{8,})", text):
-            value = match.group(1)
-            values.append(f"{value[:4]}...{value[-4:]}")
+        values: List[str] = []
+        for pattern in INLINE_PATTERNS:
+            for match in re.finditer(pattern, text):
+                value = match.group(1)
+                redacted = f"{value[:4]}...{value[-4:]}"
+                if redacted not in values:
+                    values.append(redacted)
         if values:
             records.append({"path": str(path), "count": len(values), "redacted": values})
     return records
@@ -884,6 +943,7 @@ def summarize(
         "project_cards": project_cards,
         "agents_dirs": sum(1 for project in projects if project.get("agents_dir")),
         "agents_with_index": sum(1 for project in projects if project.get("has_index")),
+        "git_errors": sum(1 for project in projects if project.get("git_state") == "error"),
         "skills": len(skills),
         "skill_copies": sum(len(skill.get("copies", [])) for skill in skills),
         "artifacts": len(artifacts),

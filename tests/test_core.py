@@ -19,7 +19,7 @@ from guster.executor import apply_plan, init_home, preflight  # noqa: E402
 from guster.hub import attach_hub, init_hub, validate_hub  # noqa: E402
 from guster.metrics import compute_metrics  # noqa: E402
 from guster.planner import load_plan, plan_init_project, plan_move  # noqa: E402
-from guster.policy import run_policy  # noqa: E402
+from guster.policy import extract_filename_date, extract_verified_date, run_policy  # noqa: E402
 from guster.report import render_report  # noqa: E402
 from guster.util import extract_pointers  # noqa: E402
 
@@ -595,7 +595,7 @@ class GusterCoreTests(unittest.TestCase):
         self.assertEqual(stats["state_docs_fresh_from_git"], 1)
         self.assertNotIn("stale-state", {item["rule"] for item in policy["findings"]})
 
-    def test_empty_state_denominator_prints_zero_over_zero(self) -> None:
+    def test_empty_state_denominator_is_not_a_perfect_score(self) -> None:
         hub = self.fx.tmp / "empty-state-hub"
         write(hub / "AGENTS.md", "# Hub\n")
         write(hub / "knowledge" / "README.md", "# Knowledge\n")
@@ -614,11 +614,13 @@ class GusterCoreTests(unittest.TestCase):
         policy = run_policy(registry, config)
         self.assertEqual(policy["stats"]["state_docs_total"], 0)
         metrics = compute_metrics(registry, policy)
-        self.assertEqual(metrics["scores"]["frs"], 100.0)
+        self.assertIsNone(metrics["scores"]["frs"])
+        self.assertIn("frs", metrics["unscored_dims"])
         report = render_report(registry, policy, metrics)
-        self.assertIn("| State freshness | 1.0 | 100.0 | 0/0 fresh", report)
+        self.assertIn("| State freshness | n/a | n/a | 0/0 fresh", report)
+        self.assertIn("No evidence: SSR, ICR, FRS, PHR", report)
 
-    def test_empty_icr_child_stays_visible_and_averages_to_one(self) -> None:
+    def test_empty_icr_child_is_excluded_not_counted_as_one(self) -> None:
         hub = self.fx.tmp / "zero-icr-hub"
         state = self.fx.tmp / "zero-icr-state"
         init_hub(hub, state, yes=True, dry_run=False)
@@ -639,7 +641,8 @@ class GusterCoreTests(unittest.TestCase):
         self.assertEqual(metrics["raw"]["knowledge_total"], 2)
         self.assertEqual(metrics["raw"]["knowledge_indexed"], 1)
         self.assertEqual(metrics["raw"]["agents_dirs_total"], 0)
-        self.assertEqual(metrics["metrics"]["icr"], 0.75)
+        self.assertEqual(metrics["metrics"]["icr"], 0.5)
+        self.assertNotIn("icr", metrics["unscored_dims"])
         report = render_report(registry, policy, metrics)
         self.assertIn("knowledge 1/2; .agents index 0/0", report)
 
@@ -881,6 +884,133 @@ class GusterCoreTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             run_policy(self.fx.registry(), self.fx.config())
+
+    def test_chi_is_the_documented_weighted_sum(self) -> None:
+        registry = {"scope": "machine", "topics": {"total": 10, "multi": 2}}
+        stats = {
+            "resident_bytes": 10_000,
+            "skill_chars": 3_000,
+            "agents_dirs_total": 10,
+            "agents_dirs_compliant": 9,
+            "agents_indexed": 9,
+            "knowledge_total": 10,
+            "knowledge_indexed": 8,
+            "state_docs_total": 10,
+            "state_docs_fresh": 6,
+            "pointers_checked": 10,
+            "pointers_valid": 5,
+            "secret_total": 4,
+            "secret_undeclared_outside": 1,
+            "secret_in_git": 0,
+            "secret_tracking_unknown": 0,
+            "inline_bearers": 0,
+            "governance_docs": 4,
+        }
+        metrics = compute_metrics(registry, {"stats": stats})
+        self.assertEqual(metrics["scores"]["ssr"], 80.0)
+        self.assertEqual(metrics["scores"]["rbr"], 100.0)
+        self.assertEqual(metrics["scores"]["pcr"], 90.0)
+        self.assertEqual(metrics["scores"]["icr"], 85.0)
+        self.assertEqual(metrics["scores"]["frs"], 60.0)
+        self.assertEqual(metrics["scores"]["phr"], 50.0)
+        self.assertEqual(metrics["scores"]["sir"], 75.0)
+        expected = (
+            0.20 * 0.8
+            + 0.15 * 1.0
+            + 0.15 * 0.9
+            + 0.15 * 0.85
+            + 0.15 * 0.6
+            + 0.10 * 0.5
+            + 0.10 * 0.75
+        ) * 100
+        self.assertAlmostEqual(metrics["chi"], expected, delta=0.1)
+
+    def test_filename_date_only_counts_a_leading_date(self) -> None:
+        self.assertEqual(extract_filename_date(Path("2026-11-05-daily.md")), "2026-11-05")
+        self.assertEqual(extract_filename_date(Path("20261101-1200-demo.md")), "2026-11-01")
+        self.assertEqual(extract_filename_date(Path("ticket-20261105-notes.md")), "")
+        self.assertEqual(extract_filename_date(Path("2026-13-45-nope.md")), "")
+
+    def test_verified_date_ignores_prose_below_the_header(self) -> None:
+        body = "\n".join(["# Doc", ""] + ["filler"] * 60 + ["见 old.md，最后更新：2020-01-01"])
+        self.assertEqual(extract_verified_date(body), "")
+        self.assertEqual(
+            extract_verified_date("# Doc\n\n**最后更新**: 2026-02-01\n"), "2026-02-01"
+        )
+
+    def test_directory_pointers_are_checked(self) -> None:
+        self.assertEqual(extract_pointers("见 `knowledge/general/`"), ["knowledge/general/"])
+
+    def test_registered_outside_credentials_do_not_lower_sir(self) -> None:
+        project = self.fx.tmp / "plain-project"
+        write(project / "AGENTS.md", "# Plain\n")
+        env_path = project / ".env"
+        write(env_path, "TOKEN=x\n")
+        write(
+            self.fx.home / ".agents" / "credentials" / "registry.md",
+            "# 凭据索引\n\n"
+            "| ID | 归属 | 站点 | 账号 | 类型 | 存放位置 | 变量名 | 使用方 | 状态 |\n"
+            "|---|---|---|---|---|---|---|---|---|\n"
+            f"| t1 | company | Local | me | env | {env_path} | - | tool | canonical |\n",
+        )
+        config = ScanConfig(
+            home=self.fx.home,
+            hub=self.fx.hub,
+            roots=[project],
+            state_dir=self.fx.tmp / "plain-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="project",
+            now="2026-11-03T00:00:00+08:00",
+        )
+        registry = scan(config)
+        policy = run_policy(registry, config)
+        stats = policy["stats"]
+        self.assertEqual(stats["secret_total"], 1)
+        self.assertEqual(stats["secret_undeclared_outside"], 0)
+        self.assertEqual(stats["secret_tracking_unknown"], 0)
+        metrics = compute_metrics(registry, policy)
+        self.assertEqual(metrics["scores"]["sir"], 50.0)
+
+    def test_failed_git_probe_is_loud_and_fails_closed(self) -> None:
+        registry = self.fx.registry()
+        policy = run_policy(registry, self.fx.config())
+        rules = {item["rule"] for item in policy["findings"]}
+        self.assertIn("git-unavailable", rules)
+        self.assertEqual(policy["stats"]["secret_tracking_unknown"], 1)
+        self.assertEqual([project["git_state"] for project in registry["projects"]], ["error"])
+
+    def test_env_files_are_found_beyond_one_level(self) -> None:
+        deep = self.fx.project / "server" / "config" / ".env"
+        write(deep, "TOKEN=x\n")
+        registry = self.fx.registry()
+        paths = {item["path"] for item in registry["secrets"]["files"]}
+        self.assertIn(str(deep), paths)
+
+    def test_status_reports_the_snapshot_instead_of_mixing_a_stale_scan(self) -> None:
+        state = self.fx.tmp / "status-state"
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"HOME": str(self.fx.home)}):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                first = cli.main(
+                    ["scan", "--root", str(self.fx.workspace), "--hub", str(self.fx.hub), "--state-dir", str(state)]
+                )
+                second = cli.main(
+                    ["status", "--root", str(self.fx.workspace), "--hub", str(self.fx.hub), "--state-dir", str(state)]
+                )
+        self.assertEqual(first, 0)
+        self.assertEqual(second, 0)
+        self.assertIn("cached registry", out.getvalue())
+
+    def test_score_fail_under_gates_the_exit_code(self) -> None:
+        state = self.fx.tmp / "gate-state"
+        argv = ["score", "--root", str(self.fx.workspace), "--hub", str(self.fx.hub), "--state-dir", str(state), "--no-write"]
+        with mock.patch.dict(os.environ, {"HOME": str(self.fx.home)}):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                passing = cli.main(argv + ["--fail-under", "0"])
+                failing = cli.main(argv + ["--fail-under", "100"])
+        self.assertEqual(passing, 0)
+        self.assertEqual(failing, 2)
 
     def test_local_wiki_ignores_compatibility_symlinks(self) -> None:
         wiki = self.fx.home / ".agents" / "wiki"

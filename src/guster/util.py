@@ -299,7 +299,8 @@ def find_git_roots(roots: Sequence[Path], max_depth: int = 5) -> List[Path]:
     return sorted(found, key=lambda item: str(item))
 
 
-def git_tracked(root: Path) -> Set[str]:
+def git_tracked(root: Path) -> Optional[Set[str]]:
+    """Tracked paths; None means git could not answer, never a silent empty set."""
     if not (root / ".git").exists():
         return set()
     try:
@@ -310,9 +311,9 @@ def git_tracked(root: Path) -> Set[str]:
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
-        return set()
+        return None
     if result.returncode != 0:
-        return set()
+        return None
     tracked: Set[str] = set()
     for raw in result.stdout.split(b"\x00"):
         if not raw:
@@ -321,8 +322,8 @@ def git_tracked(root: Path) -> Set[str]:
     return tracked
 
 
-def git_last_commit_dates(root: Path) -> Dict[str, str]:
-    """Map repo-relative paths to the commit date of their most recent change."""
+def git_last_commit_dates(root: Path) -> Optional[Dict[str, str]]:
+    """Map repo-relative paths to the newest commit date; None when git failed."""
     if not (root / ".git").exists():
         return {}
     try:
@@ -334,9 +335,9 @@ def git_last_commit_dates(root: Path) -> Dict[str, str]:
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
-        return {}
+        return None
     if result.returncode != 0:
-        return {}
+        return None
     dates: Dict[str, str] = {}
     current = ""
     for line in result.stdout.splitlines():
@@ -410,6 +411,10 @@ def _looks_like_pointer(candidate: str) -> bool:
             "/Volumes/",
         )
         return candidate.startswith(known_roots)
+    if candidate.endswith("/"):
+        # A relative directory pointer (`knowledge/general/`) has no suffix and
+        # is still a link worth checking.
+        return True
     return "/" in candidate and suffix in POINTER_SUFFIXES
 
 
@@ -429,6 +434,18 @@ def _strip_pointer(pointer: str) -> str:
         pointer = pointer[7:]
     pointer = re.sub(r":\d+(?::\d+)?$", "", pointer)
     return pointer
+
+
+def find_repo_root(start: Path) -> Optional[Path]:
+    """Nearest enclosing git work tree; `.claude/` and `.agents/` docs address the repo root."""
+    cursor = start
+    for _ in range(8):
+        if (cursor / ".git").exists():
+            return cursor
+        if cursor.parent == cursor:
+            return None
+        cursor = cursor.parent
+    return None
 
 
 def resolve_pointer(
@@ -454,24 +471,19 @@ def resolve_pointer(
     if cleaned.startswith(("./", "../")):
         return (base_file.parent / expanded).resolve()
     anchor = cleaned.split("/", 1)[0]
-    anchors: List[Path] = [base_file.parent]
+    roots: List[Path] = [base_file.parent]
+    repo_root = find_repo_root(base_file.parent)
+    if repo_root is not None and repo_root != base_file.parent:
+        roots.append(repo_root)
     if hub is not None:
-        anchors.append(hub)
+        roots.append(hub)
     if home is not None:
-        anchors.extend([home, home / "IdeaProjects", home / "ZCodeProject"])
-    if not any((root / anchor).exists() for root in anchors):
+        roots.extend([home, home / "IdeaProjects", home / "ZCodeProject"])
+    if not any((root / anchor).exists() for root in roots):
         # A bare relative path only counts as a pointer when its first segment
         # exists in one of the known roots. Otherwise it is prose about another repo.
         return None
-    candidates: List[Path] = [
-        (base_file.parent / expanded).resolve(),
-    ]
-    if hub is not None:
-        candidates.append((hub / expanded).resolve())
-    if home is not None:
-        candidates.append((home / expanded).resolve())
-        candidates.append((home / "IdeaProjects" / expanded).resolve())
-        candidates.append((home / "ZCodeProject" / expanded).resolve())
+    candidates: List[Path] = [(root / expanded).resolve() for root in roots]
     for candidate in candidates:
         if candidate.exists():
             return candidate

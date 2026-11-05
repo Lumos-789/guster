@@ -23,6 +23,32 @@ from .util import (
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 COMMON_KNOWLEDGE_NAMES = {"readme.md", "agents.md", "index.md", "skill.md"}
 MEDIA_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".wav", ".mp3"}
+RESIDENT_ENTRIES = (
+    (".zcode", "AGENTS.md"),
+    (".dsh", "AGENTS.md"),
+    (".codex", "AGENTS.md"),
+    (".claude", "CLAUDE.md"),
+)
+DATE_HEADER_LINES = 40
+
+
+def resident_entries(home: Path) -> List[Path]:
+    """Host entry files that exist, deduped by real path (hosts often symlink one file)."""
+    seen: Set[str] = set()
+    entries: List[Path] = []
+    for folder, name in RESIDENT_ENTRIES:
+        path = home / folder / name
+        if not path.is_file():
+            continue
+        try:
+            real = str(path.resolve())
+        except OSError:
+            continue
+        if real in seen:
+            continue
+        seen.add(real)
+        entries.append(path)
+    return entries
 
 
 def finding(
@@ -94,9 +120,15 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         "duplicate_knowledge": 0,
         "governance_docs": len(registry.get("governance_docs", [])),
         "misplaced_entries": 0,
+        "resident_entries": 0,
         "secret_total": 0,
         "secret_outside_root": 0,
         "secret_in_git": 0,
+        "secret_tracking_unknown": 0,
+        "secret_undeclared_outside": 0,
+        "pointer_files_total": 0,
+        "pointer_files_scanned": 0,
+        "git_probe_failures": 0,
         "inline_bearers": 0,
     }
     home = config.home
@@ -105,42 +137,50 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     hub_layout = resolve_hub_layout(hub) if hub else {}
     artifacts = registry.get("artifacts", [])
     projects = registry.get("projects", [])
+    git_failures: List[str] = [
+        str(project.get("path") or project.get("id"))
+        for project in projects
+        if project.get("git_state") == "error"
+    ]
     skills = registry.get("skills", [])
 
-    # Resident budget
-    user_agents = home / ".zcode" / "AGENTS.md" if scope != "hub" else None
-    hub_agents = (hub / "AGENTS.md") if hub else None
-    resident_bytes = (file_size(user_agents) if user_agents else 0) + (
+    # Resident budget: every host entry file that exists, counted once.
+    user_agents = resident_entries(home) if scope != "hub" else []
+    hub_agents = (hub / "AGENTS.md") if hub and (hub / "AGENTS.md").is_file() else None
+    resident_bytes = sum(file_size(path) for path in user_agents) + (
         file_size(hub_agents) if hub_agents else 0
     )
-    resident_lines = (count_lines(user_agents) if user_agents else 0) + (
+    resident_lines = sum(count_lines(path) for path in user_agents) + (
         count_lines(hub_agents) if hub_agents else 0
     )
     stats["resident_bytes"] = resident_bytes
     stats["resident_lines"] = resident_lines
+    stats["resident_entries"] = len(user_agents)
     if resident_bytes > 20_000:
         findings.append(
             finding(
                 "resident-budget",
                 "medium",
                 "Resident context exceeds 20 KB",
-                str(user_agents or hub_agents or ""),
+                str(user_agents[0] if user_agents else (hub_agents or "")),
                 f"User + hub resident instruction is {resident_bytes} bytes / {resident_lines} lines.",
                 "Move procedures, examples and state tables into knowledge or skills; keep only rules and pointers.",
                 {"bytes": resident_bytes, "lines": resident_lines, "target_bytes": 20_000},
             )
         )
-    if user_agents and count_lines(user_agents) > 150:
-        findings.append(
-            finding(
-                "resident-budget",
-                "medium",
-                "User-level instruction exceeds soft line budget",
-                str(user_agents),
-                f"{count_lines(user_agents)} lines; soft target is 150.",
-                "Demote long procedures and examples.",
+    for path in user_agents:
+        lines = count_lines(path)
+        if lines > 150:
+            findings.append(
+                finding(
+                    "resident-budget",
+                    "medium",
+                    "User-level instruction exceeds soft line budget",
+                    str(path),
+                    f"{lines} lines; soft target is 150.",
+                    "Demote long procedures and examples.",
+                )
             )
-        )
     if hub_agents and count_lines(hub_agents) > 50:
         findings.append(
             finding(
@@ -303,6 +343,10 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     ]
     stats["state_docs_total"] = len(state_docs)
     commit_dates = git_last_commit_dates(hub) if hub else {}
+    if commit_dates is None:
+        if str(hub) not in git_failures:
+            git_failures.append(str(hub))
+        commit_dates = {}
     project_roots = {str(project["id"]): Path(project["path"]) for project in projects}
     project_commit_dates: Dict[str, Dict[str, str]] = {}
     stale_missing: List[str] = []
@@ -323,7 +367,12 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
             else:
                 key = str(project_root)
                 if key not in project_commit_dates:
-                    project_commit_dates[key] = git_last_commit_dates(project_root)
+                    dates = git_last_commit_dates(project_root)
+                    if dates is None:
+                        if key not in git_failures:
+                            git_failures.append(key)
+                        dates = {}
+                    project_commit_dates[key] = dates
                 verified = project_commit_dates[key].get(item.get("rel", ""), "")
             source = "git"
         if not verified:
@@ -364,6 +413,19 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                 {"count": len(stale_old), "examples": stale_old[:10]},
             )
         )
+    stats["git_probe_failures"] = len(git_failures)
+    if git_failures:
+        findings.append(
+            finding(
+                "git-unavailable",
+                "high",
+                "Repository state could not be read",
+                git_failures[0],
+                f"{len(git_failures)} repository(ies) could not be queried; tracked state and commit dates are unknown.",
+                "Fix git access for these repositories and re-run; SIR and FRS do not count them as clean.",
+                {"count": len(git_failures), "repos": git_failures[:10]},
+            )
+        )
 
     # Pointers
     pointer_files = [
@@ -391,7 +453,10 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         )
     ]
     broken_by_file: List[Dict[str, Any]] = []
-    for item in pointer_files[:200]:
+    stats["pointer_files_total"] = len(pointer_files)
+    scanned_pointer_files = pointer_files[:200]
+    stats["pointer_files_scanned"] = len(scanned_pointer_files)
+    for item in scanned_pointer_files:
         path = Path(item["path"])
         text = read_text(path, limit=1_000_000)
         pointers = extract_pointers(text)
@@ -428,6 +493,9 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     stats["inline_bearers"] = sum(int(item.get("count", 0)) for item in inline)
     outside = [item for item in secret_files if not item.get("canonical")]
     stats["secret_outside_root"] = len(outside)
+    stats["secret_tracking_unknown"] = sum(
+        1 for item in secret_files if item.get("git_tracked") is None
+    )
     registry_info = secret_data.get("registry") or {}
     entries = registry_info.get("entries") or []
     declared_paths: Set[str] = set()
@@ -469,6 +537,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                 outside_undeclared.append(item["path"])
         except OSError:
             continue
+    stats["secret_undeclared_outside"] = len(outside_undeclared)
     if outside_undeclared:
         findings.append(
             finding(
@@ -668,19 +737,27 @@ def _waiver_reason(item: Dict[str, Any], waivers: Sequence[Dict[str, str]]) -> O
 
 
 def extract_verified_date(text: str) -> str:
+    """Declared date from the document header; prose deeper down is not a claim about this file."""
+    head = "\n".join(text.splitlines()[:DATE_HEADER_LINES])
     match = re.search(
         r"(?:最后更新|更新时间|更新于|最近核实|最后核实|已核实|verified_at)\s*\*{0,2}\s*[:：]\s*\*{0,2}\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})",
-        text,
+        head,
     )
     return match.group(1) if match else ""
 
 
 def extract_filename_date(path: Path) -> str:
-    match = re.search(r"(20\d{6})", path.name)
+    """Only a date that opens the filename counts; a ticket id is not a freshness claim."""
+    stem = path.stem.lstrip(".")
+    match = re.match(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})(?:$|[-_.])", stem)
     if not match:
         return ""
-    value = match.group(1)
-    return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+    year, month, day = match.groups()
+    try:
+        datetime(int(year), int(month), int(day))
+    except ValueError:
+        return ""
+    return f"{year}-{month}-{day}"
 
 
 def count_lines(path: Path) -> int:

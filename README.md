@@ -40,7 +40,7 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster status` | Show plugin version, registry and health summary |
 | `guster scan` | Discover context assets and write `registry.json` |
 | `guster doctor` | Run policy checks and write `findings.json` |
-| `guster score` | Compute metrics and CHI; append `metrics.jsonl` |
+| `guster score` | Compute metrics and CHI; append `metrics.jsonl`. `--fail-under N` turns it into a gate (exit 2) |
 | `guster plan findings` | Turn findings into a review checklist |
 | `guster plan move` | Plan a move with backup and pointer |
 | `guster plan init` | Plan a standard `.agents/` layout |
@@ -102,12 +102,20 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
   project root (`projects/`), `handoff/`, `provision/` and `.agents/plans/`
   that were verified within the 90-day SLA. The denominator is those four
   prefixes only — a hub `reports/` file or a machine-level note is not state.
-  The date comes from `verified_at`, a `最后更新` line, an 8-digit date in the
-  filename, or the last git commit of the repository that owns the document.
+  The date comes from `verified_at`, a `最后更新` line in the first 40 lines, a
+  date that opens the filename (`2026-11-05-…`, `20261105-…`), or the last git
+  commit of the repository that owns the document. A date buried in prose or a
+  ticket number inside the name is not a freshness claim.
 - **PHR** pointer health rate
 - **SIR** secret isolation rate
 
-Red-line failures override the score: credential in git, broken resident pointer, duplicate canonical source, resident hard-cap breach, or a governance entry pointing at an archived asset.
+Critical findings do not rescale CHI: they make `doctor` exit 3 (any `high`
+finding exits 2), and the score stays the weighted sum above. Treat the exit code
+as the gate and CHI as the trend.
+
+A dimension with no evidence is reported as `n/a` and dropped from the weighted
+sum instead of scoring 1.0: an empty denominator means "not measured", not
+"perfect". When every dimension of a scope is empty, CHI itself is `n/a`.
 
 ## Scopes
 
@@ -126,10 +134,12 @@ that scope. `project` and `group` runs therefore drop hub knowledge, hub state
 documents and the machine-level local wiki from ICR/FRS/PHR unless they live
 under one of the given roots; the report table shows exactly the dimensions that
 enter CHI, and any extra value is labeled `Not counted in CHI`. A dimension with
-no in-scope artifacts stays vacuous (`0/0` in the raw column, score 1.0) instead
+no in-scope artifacts stays vacuous (`0/0` in the raw column, `n/a` score) instead
 of borrowing health from out-of-scope files. This changes CHI for `project` and
 `group` scopes; hub health keeps being reported by `--scope hub` and the
-machine-wide run.
+machine-wide run. Because empty dimensions are dropped and the weights are
+renormalized over what remains, CHI is not comparable across scopes with
+different coverage.
 
 ## Credential registry
 
@@ -137,6 +147,9 @@ Guster reads `~/.agents/credentials/registry.md` and checks it against every cre
 
 - `secret-undeclared` - a credential file is not registered.
 - `secret-missing` - a registered location no longer exists.
+- `git-unavailable` - a repository could not be queried, so tracked state and
+  commit dates are unknown. SIR counts those credentials as unverified rather
+  than clean.
 
 The registry holds scope (`company` / `personal`), site, account, kind, location and variable names.
 It never holds values. `guster credentials` prints the split.

@@ -134,11 +134,33 @@ def append_metric(config: ScanConfig, metric_result: Dict[str, Any]) -> None:
     path = config.state_dir / "metrics.jsonl"
     line = {
         "at": metric_result.get("generated_at", now_iso()),
+        "scope": metric_result.get("scope"),
         "chi": metric_result.get("chi"),
-        **metric_result.get("metrics", {}),
+        "dims": metric_result.get("dims"),
+        "unscored_dims": metric_result.get("unscored_dims"),
+        "metrics": metric_result.get("metrics", {}),
+        "scores": metric_result.get("scores", {}),
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+def last_metric(config: ScanConfig) -> Optional[Dict[str, Any]]:
+    """Newest persisted snapshot; `status` reports this instead of mixing a stale scan with fresh policy."""
+    path = config.state_dir / "metrics.jsonl"
+    if not path.is_file():
+        return None
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        item = json.loads(lines[-1])
+    except ValueError:
+        return None
+    if not isinstance(item, dict):
+        return None
+    item.setdefault("generated_at", item.get("at"))
+    return item
 
 
 def write_findings(config: ScanConfig, policy_result: Dict[str, Any]) -> None:
@@ -170,9 +192,19 @@ def print_scan_summary(registry: Dict[str, Any], config: ScanConfig) -> None:
 def cmd_status(args: argparse.Namespace) -> int:
     config = build_config(args)
     registry = load_registry(config)
+    cached = registry is not None
     if registry is None:
         registry = do_scan(config, write=True)
-    result = evaluate(registry, config)
+    policy_result: Optional[Dict[str, Any]] = None
+    if cached:
+        # The cached registry describes an earlier scan. Running policy against
+        # it would mix old artifacts with fresh file contents, so report the
+        # stored snapshot and let `doctor` own the fresh evaluation.
+        metric_result = last_metric(config)
+    else:
+        result = evaluate(registry, config)
+        policy_result = result["policy"]
+        metric_result = result["metrics"]
     if args.json:
         print(json_dumps({
             "registry": {
@@ -182,13 +214,17 @@ def cmd_status(args: argparse.Namespace) -> int:
                 "workspaces": registry.get("workspaces"),
                 "summary": registry.get("summary"),
             },
-            "metrics": result["metrics"],
-            "findings": len(result["policy"]["findings"]),
+            "metrics": metric_result,
+            "cached": cached,
+            "findings": None if policy_result is None else len(policy_result["findings"]),
         }))
     else:
-        print(render_status(registry, result["metrics"]))
-        print(metric_line(result["metrics"]))
-        print(f"findings: {len(result['policy']['findings'])}")
+        print(render_status(registry, metric_result))
+        if policy_result is None:
+            print("cached registry; run `guster doctor` for a fresh evaluation")
+        elif metric_result is not None:
+            print(metric_line(metric_result))
+            print(f"findings: {len(policy_result['findings'])}")
     return 0
 
 
@@ -232,13 +268,14 @@ def cmd_score(args: argparse.Namespace) -> int:
     if args.json:
         print(json_dumps(metric_result))
     elif not args.quiet:
-        print(f"Guster Context Health: {metric_result['chi']} / 100")
+        chi = metric_result.get("chi")
+        print(f"Guster Context Health: {'n/a' if chi is None else chi} / 100")
         print("")
         dims = set(metric_result.get("dims") or [])
         for key, value in metric_result["scores"].items():
             if dims and key not in dims:
                 continue
-            print(f"  {key.upper():4s} {value:6.1f}")
+            print(f"  {key.upper():4s} {'n/a' if value is None else f'{value:6.1f}'}")
         print("")
         print(metric_line(metric_result))
         print(f"registry: {config.state_dir / 'registry.json'}")
@@ -255,6 +292,14 @@ def cmd_score(args: argparse.Namespace) -> int:
                     print(f"  {item.get('at')}  CHI {item.get('chi')}")
                 except ValueError:
                     continue
+    if args.fail_under is not None:
+        chi = metric_result.get("chi")
+        if chi is None:
+            print("error: CHI is not computable; no dimension has evidence", file=sys.stderr)
+            return 2
+        if chi < args.fail_under:
+            print(f"error: CHI {chi} is below --fail-under {args.fail_under}", file=sys.stderr)
+            return 2
     return 0
 
 
@@ -564,6 +609,13 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--write", action="store_true", help="Write metrics (default; kept for explicit scripts).")
     score.add_argument("--no-write", action="store_true", help="Do not append metrics.jsonl.")
     score.add_argument("--trend", action="store_true", help="Show the last 10 metric snapshots.")
+    score.add_argument(
+        "--fail-under",
+        type=float,
+        default=None,
+        metavar="CHI",
+        help="Exit 2 when CHI is below this value (opt-in gate for CI).",
+    )
     score.set_defaults(func=cmd_score)
 
     plan = subparsers.add_parser("plan", help="Create a reviewable plan.")

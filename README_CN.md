@@ -101,12 +101,15 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 - **FRS** 状态新鲜度：Hub 项目卡目录（`projects/`）、`handoff/`、`provision/`
   与 `.agents/plans/` 四类状态文档中在 90 天 SLA 内核实过的比例；分母只认这四个
   前缀，Hub `reports/` 或机器级笔记不算状态文档。日期依次取自 `verified_at`、
-  正文或前置元数据中的 `最后更新`、文件名中的 8 位日期，或该文档所属仓库的最后
-  一次 git 提交。
+  前 40 行内的 `最后更新`、文件名开头处的日期（`2026-11-05-…`、`20261105-…`），
+  或该文档所属仓库的最后一次 git 提交。正文深处的日期和文件名里的工单号都不算
+  新鲜度声明。
 - **PHR** 指针健康率
 - **SIR** 敏感隔离率
 
-红线优先于总分：凭据进 git、常驻入口断链、多规范源、常驻超硬顶、治理入口指向已归档资产。
+严重 finding 不改写 CHI：它让 `doctor` 以 3 退出（任意 `high` 退出 2），分数仍是上面的加权和。门禁看退出码，CHI 看趋势。
+
+某个维度没有证据时记为 `n/a` 并从加权和中剔除，而不是记 1.0：空分母表示「没测」，不是「满分」。某 scope 的所有维度都为空时，CHI 本身为 `n/a`。
 
 ## 层级
 
@@ -119,7 +122,7 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 
 带范围的运行写入 `~/.agents/guster/scoped/<hash>/`。
 
-每个带范围的运行对报告两侧使用同一条边界：一个 artifact 只有在「针对它的 finding 也能出现在该 scope」时，才计入分母。因此 `project` / `group` 运行会把 Hub 知识、Hub 状态文档和机器级本地 wiki 从 ICR/FRS/PHR 分母中剔除，除非它们就在给定 root 之下；报告表格只列真正进入 CHI 的维度，额外展示的数值必须标注 `Not counted in CHI`。某个维度在该 scope 内没有 artifact 时保持空集口径（Raw 列显示 `0/0`，得分 1.0），而不是借用 scope 外文件的健康度。这会改变 `project` / `group` 的 CHI；Hub 健康度仍由 `--scope hub` 和全机运行报告。
+每个带范围的运行对报告两侧使用同一条边界：一个 artifact 只有在「针对它的 finding 也能出现在该 scope」时，才计入分母。因此 `project` / `group` 运行会把 Hub 知识、Hub 状态文档和机器级本地 wiki 从 ICR/FRS/PHR 分母中剔除，除非它们就在给定 root 之下；报告表格只列真正进入 CHI 的维度，额外展示的数值必须标注 `Not counted in CHI`。某个维度在该 scope 内没有 artifact 时保持空集口径（Raw 列显示 `0/0`，得分 `n/a`），而不是借用 scope 外文件的健康度。这会改变 `project` / `group` 的 CHI；Hub 健康度仍由 `--scope hub` 和全机运行报告。空维度被剔除后权重在剩余维度上归一，因此覆盖度不同的 scope 之间 CHI 不可横向比较。
 
 ## 凭据登记
 
@@ -127,6 +130,7 @@ Guster 读取 `~/.agents/credentials/registry.md`，并对照它检查发现的�
 
 - `secret-undeclared` — 凭据文件没有登记。
 - `secret-missing` — 已登记的位置已不存在。
+- `git-unavailable` — 某个仓库查询失败，跟踪状态与提交日期未知；SIR 会把这类凭据记为「未核实」而不是「干净」。
 
 登记表保存范围（`company` / `personal`）、站点、账号、类型、位置和变量名，从不保存凭据值。`guster credentials` 按范围输出。
 

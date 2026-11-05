@@ -2,6 +2,60 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.6.0 — 2026-11-05
+
+Measurement honesty pass. Every change below removes a case where the score
+claimed knowledge it did not have.
+
+- **An empty denominator is now `n/a`, not 1.0.** A dimension with no evidence
+  is dropped and the remaining weights are renormalized; a scope with no
+  evidence reports `CHI: n/a`. This reverses the 0.5.5 behavior ("empty
+  denominators still print `0/0` and score 1.0"), which let a scope with fewer
+  artifacts outrank a measured one. `project`/`group` CHI therefore drops when
+  their denominators are empty, and scores are no longer comparable across
+  scopes with different coverage. RBR follows the same rule per component: a
+  missing entry file is not a perfect budget.
+- **Git probe failures are loud instead of clean.** `git ls-files` and
+  `git log` returning an error used to look like "no tracked files" and "no
+  commit dates": credentials read as isolated and state documents read as
+  undated. Both now return `None`, surface as a new `git-unavailable` finding,
+  and SIR counts the affected credentials as unverified. `registry.json`
+  records `git_state` per project.
+- **SIR stops punishing registered credentials.** The numerator is now
+  unregistered-outside + tracked + unverified + inline, so a file declared in
+  `~/.agents/credentials/registry.md` no longer costs points; previously 30 of
+  31 in-place company `.env` files were counted as failures while the matching
+  finding was suppressed. The `secret-outside-root` finding and SIR finally
+  share one definition.
+- **Dates are read where a freshness claim actually lives.** A filename date
+  must open the name (`2026-11-05-x`, `20261105-x`); `ticket-20261105-notes.md`
+  no longer counts as today's work. `最后更新` is matched in the first 40 lines
+  only, so prose mentioning another file cannot date this one.
+- **PHR sees directory pointers** (`knowledge/general/`) and resolves paths
+  against the enclosing repository root, so `.claude/CLAUDE.md` and
+  `.agents/README.md` stop reporting root-relative links as broken. The report
+  states when the 200-file pointer cap narrowed the scan.
+- **RBR probes the host that is actually installed.** It used to read
+  `~/.zcode/AGENTS.md` only; a DSH-only machine measured 0 bytes and scored
+  full marks. It now sums the entry files that exist, deduplicated by real path.
+- **Wider credential detection, same read-only boundary.** `.env` discovery
+  goes two levels deep instead of one, and inline detection covers `api_key`,
+  `secret_key`, `auth_token` and `sk-…` shapes besides `Bearer`. Values stay
+  redacted and are never printed.
+- **ICR requires a non-empty index**: an empty `README.md` no longer counts as
+  indexing `.agents/`.
+- **`status` reports a snapshot instead of mixing two scans.** It used to run
+  fresh policy against a cached registry; it now prints the cached registry plus
+  the last `metrics.jsonl` entry, and says so.
+- **`score --fail-under N`** turns CHI into an opt-in gate (exit 2). `score`
+  still exits 0 by default.
+- **`metrics.jsonl` records the scope and both value sets** (raw `metrics` and
+  capped `scores`), so a trend line no longer mixes a budget ratio with a score.
+- Knowledge files up to 8 MB are hashed (was 2 MB); oversized ones are counted
+  in `knowledge_unhashed` instead of silently skipping single-source checks.
+- The report now prints how many projects have no `.agents/` directory, which
+  dimension had no evidence, and when the pointer scan was truncated.
+
 ## 0.5.5 — 2026-11-05
 
 - FRS now counts state documents under the hub project root (`projects/`),
