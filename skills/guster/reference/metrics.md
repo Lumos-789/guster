@@ -9,11 +9,11 @@ resolution and git metadata. Nothing measures runtime token usage.
 |---|---|---:|---|
 | SSR | single-source rate | ≥95% | topics with one source / all topics (filename stem + content hash) |
 | RBR | resident budget ratio | ≤100% | bytes of existing host entry files + hub `AGENTS.md` over 20 KB; skill descriptions over 6,000 chars |
-| PCR | placement compliance rate | ≥90% | `.agents/` dirs with all six slots, a non-empty index and no unknown top-level entry / dirs that have `.agents/` |
+| PCR | placement compliance rate | ≥90% | `.agents/` dirs with all six slots, a non-empty index and no unknown top-level entry / dirs that have `.agents/` (workspace containers excluded) |
 | ICR | index coverage rate | knowledge 100%, `.agents` ≥90% | mean of indexed knowledge files and `.agents/` dirs with an index |
 | FRS | state freshness rate | ≥90% | state docs verified within 90 days / state docs |
 | PHR | pointer health rate | 100% | resolvable pointers / resolvable-looking pointers |
-| SIR | secret isolation rate | ≥95% | credential files that are unregistered, tracked, unverifiable or inline / credential files + inline tokens |
+| SIR | secret isolation rate | ≥95% | credential files that are unregistered, tracked, unverifiable or inline / credential files + inline tokens. Inline means host config, not arbitrary file content |
 | GCR | governance complexity ratio | ≤0.5 | governance documents / 8; reported, never scored |
 
 ## Targets

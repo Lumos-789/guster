@@ -1012,6 +1012,54 @@ class GusterCoreTests(unittest.TestCase):
         self.assertEqual(passing, 0)
         self.assertEqual(failing, 2)
 
+    def test_workspace_container_is_not_scored_as_a_project(self) -> None:
+        ws = self.fx.tmp / "ws"
+        write(ws / "AGENTS.md", "# Workspace\n")
+        write(ws / ".agents" / "plans" / "p.md", "# Plan\n")
+        inner = ws / "inner"
+        (inner / ".git").mkdir(parents=True)
+        write(inner / "AGENTS.md", "# Inner\n")
+        write(inner / ".agents" / "README.md", "# Index\n")
+        for slot in ("plans", "wiki", "evidence", "skills", "tmp", "archive"):
+            (inner / ".agents" / slot).mkdir(parents=True, exist_ok=True)
+        config = ScanConfig(
+            home=self.fx.home,
+            hub=None,
+            roots=[ws],
+            state_dir=self.fx.tmp / "ws-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="project",
+            now="2026-11-03T00:00:00+08:00",
+        )
+        registry = scan(config)
+        containers = [Path(p["path"]).name for p in registry["projects"] if p["container"]]
+        self.assertEqual(containers, ["ws"])
+        self.assertEqual(registry["summary"]["containers"], 1)
+        policy = run_policy(registry, config)
+        self.assertEqual(policy["stats"]["agents_dirs_total"], 1)
+        self.assertEqual(policy["stats"]["agents_dirs_compliant"], 1)
+        metrics = compute_metrics(registry, policy)
+        self.assertEqual(metrics["scores"]["pcr"], 100.0)
+        report = render_report(registry, policy, metrics)
+        self.assertIn("Projects: **1** (workspace containers: 1)", report)
+
+    def test_placement_reasons_are_reported(self) -> None:
+        registry = self.fx.registry()
+        policy = run_policy(registry, self.fx.config())
+        stats = policy["stats"]
+        self.assertEqual(stats["agents_dirs_total"], 1)
+        self.assertEqual(stats["agents_dirs_compliant"], 0)
+        self.assertEqual(
+            stats["agents_dirs_missing_slots"]
+            + stats["agents_dirs_missing_index"]
+            + stats["agents_dirs_extra_entries"],
+            stats["agents_dirs_total"] - stats["agents_dirs_compliant"],
+        )
+        metrics = compute_metrics(registry, policy)
+        report = render_report(registry, policy, metrics)
+        self.assertIn("0/1 compliant", report)
+
     def test_local_wiki_ignores_compatibility_symlinks(self) -> None:
         wiki = self.fx.home / ".agents" / "wiki"
         write(wiki / "code-standards" / "api.md", "# API\n")

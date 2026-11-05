@@ -2,6 +2,25 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.6.1 — 2026-11-05
+
+- **Workspace and group roots are no longer scored as projects.** A directory
+  that holds other scanned projects (`~/IdeaProjects`, a per-group checkout
+  root) carries group-level `AGENTS.md` files but is not a project: counting it
+  inflated `Projects:` and turned one container's partial `.agents/` into a
+  permanent placement failure. `registry.json` marks `container`, PCR/ICR skip
+  them, and the report reads `Projects: 62 (workspace containers: 2)`.
+- **PCR explains itself.** The raw column breaks a shortfall into extra
+  top-level entries / missing slots / missing index. "9/41 · 25 extra entries"
+  is actionable; "21.4%" alone reads like a crisis.
+- Two boundaries are now written down instead of being implicit, so they stop
+  coming back as "bugs": PCR's denominator is adopters only (a repo whose sole
+  context asset is one well-placed `AGENTS.md` has nothing to place — demanding
+  six empty slot directories there would be structure theater, and
+  `<repo>/skills/` is product source in a skill repository, not unplaced
+  context), and SIR does not scan arbitrary file content for token shapes (the
+  release gate owns that; SIR only claims host configuration it actually read).
+
 ## 0.6.0 — 2026-11-05
 
 Measurement honesty pass. Every change below removes a case where the score

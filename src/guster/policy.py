@@ -109,6 +109,9 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         "broken_pointers": 0,
         "agents_dirs_total": 0,
         "agents_dirs_compliant": 0,
+        "agents_dirs_missing_index": 0,
+        "agents_dirs_missing_slots": 0,
+        "agents_dirs_extra_entries": 0,
         "knowledge_total": 0,
         "knowledge_indexed": 0,
         "agents_index_total": 0,
@@ -295,6 +298,10 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     for project in projects:
         if not project.get("agents_dir"):
             continue
+        if project.get("container"):
+            # A workspace/group root keeps container-level context; judging it as
+            # a project would score scaffolding the group never needed.
+            continue
         stats["agents_dirs_total"] += 1
         if project.get("has_index"):
             stats["agents_indexed"] += 1
@@ -303,12 +310,15 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
             for entry in project.get("agents_entries", [])
             if entry not in STANDARD_AGENTS_SLOTS and entry not in {"README.md", "AGENTS.md"}
         ]
-        if (
-            project.get("has_index")
-            and set(STANDARD_AGENTS_SLOTS).issubset(set(project.get("standard_slots", [])))
-            and not unknown
-        ):
+        slots_ok = set(STANDARD_AGENTS_SLOTS).issubset(set(project.get("standard_slots", [])))
+        if project.get("has_index") and slots_ok and not unknown:
             stats["agents_dirs_compliant"] += 1
+        elif not project.get("has_index"):
+            stats["agents_dirs_missing_index"] += 1
+        elif not slots_ok:
+            stats["agents_dirs_missing_slots"] += 1
+        else:
+            stats["agents_dirs_extra_entries"] += 1
         if unknown:
             stats["misplaced_entries"] += len(unknown)
             agents_root = Path(project.get("agents_dir") or "")

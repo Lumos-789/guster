@@ -256,6 +256,7 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
             )
         )
 
+    mark_containers(projects)
     project_by_id = {project["id"]: project for project in projects}
     index_texts = load_index_texts(home, hub, projects)
 
@@ -324,6 +325,19 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
     return registry
 
 
+def mark_containers(projects: List[Dict[str, Any]]) -> None:
+    """A directory holding other scanned projects is a workspace/group, not a project.
+
+    Group-level AGENTS.md files are instruction assets of the group; counting the
+    container as a project inflates the project count and turns one container's
+    partial `.agents/` into a permanent placement failure.
+    """
+    roots = [Path(project["path"]) for project in projects]
+    for project in projects:
+        root = Path(project["path"])
+        project["container"] = any(root in other.parents for other in roots if other != root)
+
+
 def looks_like_project(root: Path) -> bool:
     return (
         has_project_marker(root)
@@ -384,6 +398,7 @@ def scan_project(
         "tools": find_project_tools(root),
         "status": status,
         "last_scan": now,
+        "container": False,
         "git_state": "ok" if tracked is not None else "error",
         "tracked_count": len(tracked) if tracked is not None else None,
     }
@@ -940,6 +955,7 @@ def summarize(
 ) -> Dict[str, Any]:
     return {
         "projects": len(projects),
+        "containers": sum(1 for project in projects if project.get("container")),
         "project_cards": project_cards,
         "agents_dirs": sum(1 for project in projects if project.get("agents_dir")),
         "agents_with_index": sum(1 for project in projects if project.get("has_index")),

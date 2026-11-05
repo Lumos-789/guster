@@ -96,7 +96,12 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 
 - **SSR** single-source rate
 - **RBR** resident budget ratio
-- **PCR** placement compliance rate
+- **PCR** placement compliance rate: share of `.agents/` dirs with all six
+  standard slots, a non-empty index and no unknown top-level entry. The
+  denominator is `.agents/` dirs only — a repository that never adopted the
+  layout is not scored, and a directory that holds other scanned projects (a
+  workspace or group root) is not a project. The report prints the failure
+  breakdown, so a low number says why instead of just being low.
 - **ICR** index coverage rate
 - **FRS** state freshness rate: share of state documents under the hub's
   project root (`projects/`), `handoff/`, `provision/` and `.agents/plans/`
@@ -107,7 +112,9 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
   commit of the repository that owns the document. A date buried in prose or a
   ticket number inside the name is not a freshness claim.
 - **PHR** pointer health rate
-- **SIR** secret isolation rate
+- **SIR** secret isolation rate: credential files plus literal tokens in host
+  configuration. Guster does not scan arbitrary file content for token shapes —
+  that is the release gate's job; SIR only claims what it actually looked at.
 
 Critical findings do not rescale CHI: they make `doctor` exit 3 (any `high`
 finding exits 2), and the score stays the weighted sum above. Treat the exit code

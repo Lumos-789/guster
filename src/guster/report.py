@@ -31,7 +31,11 @@ def render_report(
         project_cards = summary.get("project_cards", 0)
         projects_line = f"- Projects: **{project_cards}** (scanned roots: {summary.get('projects', 0)})"
     else:
-        projects_line = f"- Projects: **{summary.get('projects', 0)}**"
+        total_projects = int(summary.get("projects", 0))
+        containers = int(summary.get("containers", 0))
+        projects_line = f"- Projects: **{total_projects - containers}**"
+        if containers:
+            projects_line += f" (workspace containers: {containers})"
 
     lines: List[str] = []
     lines.append("# Guster Context Health")
@@ -89,7 +93,16 @@ def render_report(
             f"{human_bytes(raw.get('resident_bytes', 0))} over {raw.get('resident_entries', 0)} entry files; "
             f"skills {raw.get('skill_chars', 0)} chars",
         ),
-        ("Placement", "pcr", metrics.get("pcr"), scores.get("pcr"), f"{raw.get('agents_dirs_compliant', 0)}/{raw.get('agents_dirs_total', 0)} compliant"),
+        (
+            "Placement",
+            "pcr",
+            metrics.get("pcr"),
+            scores.get("pcr"),
+            f"{raw.get('agents_dirs_compliant', 0)}/{raw.get('agents_dirs_total', 0)} compliant"
+            f" ({raw.get('agents_dirs_extra_entries', 0)} extra entries, "
+            f"{raw.get('agents_dirs_missing_slots', 0)} missing slots, "
+            f"{raw.get('agents_dirs_missing_index', 0)} no index)",
+        ),
         (
             "Index coverage",
             "icr",
