@@ -18,11 +18,11 @@ It is the **control plane** for agent context. A Guster Hub is the optional **da
 
 ```bash
 cd <checkout>
-./bin/guster init --home --yes
+./bin/guster init --yes
 ./bin/guster hub init --path <hub> --yes
 ./bin/guster scan
 ./bin/guster doctor
-./bin/guster score --write
+./bin/guster score
 ```
 
 The CLI is Python 3.9+ and has no third-party Python dependencies.

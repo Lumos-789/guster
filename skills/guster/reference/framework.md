@@ -40,9 +40,9 @@ If one container mixes two values on any axis, split it.
 2. Code/config? → 1.
 3. Changes default behavior for all tasks? → 2.
 4. Repeatable action/procedure? → 3.
-5. Current status/next step? → 4.
-6. Proof/artifact? → 5.
-7. Durable understanding? → 6.
+5. Current status/next step? → 5.
+6. Proof/artifact? → 6.
+7. Durable understanding? → 4.
 8. Temporary working data? → 7.
 
 If content hits multiple planes, split it into conclusion + evidence + pointer.

@@ -18,11 +18,11 @@ Guster 是一个可分发的 Agent 插件，用来审计和演进整台机器的
 
 ```bash
 cd <checkout>
-./bin/guster init --home --yes
+./bin/guster init --yes
 ./bin/guster hub init --path <hub> --yes
 ./bin/guster scan
 ./bin/guster doctor
-./bin/guster score --write
+./bin/guster score
 ```
 
 CLI 依赖 Python 3.9+，无第三方 Python 依赖。

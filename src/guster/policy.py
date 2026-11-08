@@ -498,7 +498,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
             )
         naked = extract_naked_pointers(text)
         if naked:
-            stats["naked_pointers"] = stats.get("naked_pointers", 0) + len(naked)
+            stats["naked_pointers"] += len(naked)
             naked_by_file.append(
                 finding(
                     "naked-pointer",

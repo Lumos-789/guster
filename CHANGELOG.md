@@ -2,6 +2,18 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.7.1 — 2026-11-09
+
+- Fixed the placement tree in `reference/framework.md`: the three arrows for
+  status/proof/durable-understanding questions pointed at the wrong plane
+  numbers (4/5/6 instead of 5/6/4), contradicting the plane definitions in the
+  same file.
+- Documentation now teaches bare commands instead of the no-op flags
+  `score --write` and `init --home`: the flags are still accepted for existing
+  scripts, but writing metrics and initializing the state home are the defaults
+  with or without them (README, README_CN, AGENTS.md, SKILL.md, doctor's
+  next-action hint.
+
 ## 0.7.0 — 2026-11-09
 
 - **Context format spec v1** (`skills/guster/reference/spec.md`): the format

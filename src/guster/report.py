@@ -211,7 +211,7 @@ def render_report(
     lines.append("2. Run `guster plan findings` to turn the remaining findings into a review checklist.")
     lines.append("3. Run `guster plan move ...` or `guster plan init ...` for structural changes.")
     lines.append("4. Apply with `guster apply <plan> --yes` only after reviewing the plan.")
-    lines.append("5. Re-run `guster score --write` and compare the trend.")
+    lines.append("5. Re-run `guster score` and compare the trend.")
     lines.append("")
     return "\n".join(lines)
 

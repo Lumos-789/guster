@@ -56,7 +56,7 @@ Rules:
 1. `guster status`
 2. `guster scan --json` (add `--root <project>` for a single project)
 3. `guster doctor`
-4. `guster score --write`
+4. `guster score`
 5. `guster plan findings` or a targeted `guster plan move|init`
 6. Read the plan with the user.
 7. `guster apply <plan> --yes`
@@ -74,13 +74,13 @@ read-only: every scanning command refreshes `~/.agents/guster/registry.json`,
 guster status
 guster scan --root ~/Projects --json
 guster doctor
-guster score --write --trend
+guster score --trend
 guster score --fail-under 80   # optional gate: exit 2 when CHI is below the target
 guster plan findings
 guster plan move --from <src> --to <dst>
 guster plan init --project <path>
 guster apply <plan> --yes
-guster init --home
+guster init
 guster init --project <path> --yes
 guster hub init --path <hub> --yes
 guster hub attach --path <hub>

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "guster"
-version = "0.7.0"
+version = "0.7.1"
 description = "Discover, audit, plan and evolve agent context across projects, skills, tools, knowledge and credentials; optionally scaffold a lightweight Guster Hub for durable knowledge and project state."
 readme = "README.md"
 requires-python = ">=3.9"

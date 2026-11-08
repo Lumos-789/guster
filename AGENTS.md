@@ -10,7 +10,7 @@ This repository is the distributable Guster plugin: the control plane for agent 
 ./bin/guster status
 ./bin/guster scan
 ./bin/guster doctor
-./bin/guster score --write
+./bin/guster score
 ./bin/guster plan findings
 ./bin/guster apply <plan> --yes
 ./bin/guster hub init --path <hub> --yes
