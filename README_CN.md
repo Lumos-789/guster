@@ -40,7 +40,7 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster status` | 查看插件版本、registry 和健康摘要 |
 | `guster scan` | 发现上下文资产并写 `registry.json` |
 | `guster doctor` | 跑规则并写 `findings.json` |
-| `guster score` | 计算指标和 CHI，追加 `metrics.jsonl` |
+| `guster score` | 计算指标和 CHI，追加 `metrics.jsonl`；`--fail-under N` 变成门禁（低于则退出码 2） |
 | `guster plan findings` | 把发现转成审阅清单 |
 | `guster plan move` | 计划一次带备份和指针的移动 |
 | `guster plan init` | 计划标准 `.agents/` 布局 |
