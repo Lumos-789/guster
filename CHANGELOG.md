@@ -5,8 +5,8 @@ Notable changes. Earlier history is in `git log`.
 ## 0.6.1 — 2026-11-05
 
 - **Workspace and group roots are no longer scored as projects.** A directory
-  that holds other scanned projects (`~/IdeaProjects`, a per-group checkout
-  root) carries group-level `AGENTS.md` files but is not a project: counting it
+  that holds other scanned projects (a per-user workspace root, a per-group
+  checkout root) carries group-level `AGENTS.md` files but is not a project: counting it
   inflated `Projects:` and turned one container's partial `.agents/` into a
   permanent placement failure. `registry.json` marks `container`, PCR/ICR skip
   them, and the report reads `Projects: 62 (workspace containers: 2)`.
