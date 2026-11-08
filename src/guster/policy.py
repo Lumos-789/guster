@@ -11,6 +11,7 @@ from .discover import ScanConfig, STANDARD_AGENTS_SLOTS, in_scope_path, scope_ro
 from .layout import load_waivers, resolve_hub_layout
 from .util import (
     age_days,
+    extract_naked_pointers,
     extract_pointers,
     git_last_commit_dates,
     parse_date,
@@ -107,6 +108,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         "pointers_checked": 0,
         "pointers_valid": 0,
         "broken_pointers": 0,
+        "naked_pointers": 0,
         "agents_dirs_total": 0,
         "agents_dirs_compliant": 0,
         "agents_dirs_missing_index": 0,
@@ -463,6 +465,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         )
     ]
     broken_by_file: List[Dict[str, Any]] = []
+    naked_by_file: List[Dict[str, Any]] = []
     stats["pointer_files_total"] = len(pointer_files)
     scanned_pointer_files = pointer_files[:200]
     stats["pointer_files_scanned"] = len(scanned_pointer_files)
@@ -493,7 +496,22 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     {"pointers": broken[:10]},
                 )
             )
+        naked = extract_naked_pointers(text)
+        if naked:
+            stats["naked_pointers"] = stats.get("naked_pointers", 0) + len(naked)
+            naked_by_file.append(
+                finding(
+                    "naked-pointer",
+                    "medium",
+                    "Path in prose is not machine-verifiable",
+                    str(path),
+                    f"{len(naked)} file path(s) sit outside a link or code span, so the pointer check never sees them.",
+                    "Wrap each path in a markdown link or inline code (CTX-03, reference/spec.md).",
+                    {"paths": naked[:10]},
+                )
+            )
     findings.extend(broken_by_file[:100])
+    findings.extend(naked_by_file[:100])
 
     # Secrets
     secret_data = registry.get("secrets", {})

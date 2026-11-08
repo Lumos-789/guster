@@ -2,6 +2,24 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.7.0 — 2026-11-09
+
+- **Context format spec v1** (`skills/guster/reference/spec.md`): the format
+  contract behind the metrics, written down and versioned — eight rules
+  (`CTX-01..08`, markdownlint-style stable IDs) covering instruction files,
+  indexes, pointers, dates, slots, single-source, skill metadata and
+  credentials, each naming the finding that enforces it. Follows open
+  conventions: `AGENTS.md` (agents.md) for instruction files, llms.txt-shaped
+  link indexes, stable rule IDs. The skill cites it when writing or moving
+  context assets; project and hub scaffolds now state the pointer rule.
+- **New finding `naked-pointer` (medium)**: file paths left outside a markdown
+  link or code span in an instruction or index document are reported — until
+  now such paths were invisible to the pointer check, so a broken link written
+  in prose never fired. Directory references in prose are deliberately not
+  flagged. Advisory only: no CHI dimension changes, scores stay comparable.
+- `metrics.raw.naked_pointers` counts the new finding; the guster skill
+  workflow adds a post-apply `doctor` pass and triggers on 上下文格式/格式规范.
+
 ## 0.6.1 — 2026-11-05
 
 - **Workspace and group roots are no longer scored as projects.** A directory

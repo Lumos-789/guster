@@ -21,7 +21,7 @@ from guster.metrics import compute_metrics  # noqa: E402
 from guster.planner import load_plan, plan_init_project, plan_move  # noqa: E402
 from guster.policy import extract_filename_date, extract_verified_date, run_policy  # noqa: E402
 from guster.report import render_report  # noqa: E402
-from guster.util import extract_pointers  # noqa: E402
+from guster.util import extract_naked_pointers, extract_pointers  # noqa: E402
 
 
 def write(path: Path, text: str) -> None:
@@ -859,6 +859,31 @@ class GusterCoreTests(unittest.TestCase):
             "本机路径 `~/.agents/skills/watch-video` 仍然校验。\n"
         )
         self.assertEqual(extract_pointers(text), ["~/.agents/skills/watch-video"])
+
+    def test_extract_naked_pointers_flags_prose_paths_only(self) -> None:
+        text = (
+            "Naked ones: read docs/setup.md first, then 见tools/run.py:42 直接跑。\n"
+            "Covered ones: [`wiki/a.md`](wiki/a.md) and `wiki/b.md` stay invisible.\n"
+            "Noise: https://example.com/page.md, draft-NNN.md, package.json, "
+            "and the bare directory ~/work/some-repo are not file pointers.\n"
+        )
+        self.assertEqual(extract_naked_pointers(text), ["docs/setup.md", "tools/run.py"])
+
+    def test_extract_naked_pointers_ignores_code_and_links_entirely(self) -> None:
+        text = (
+            "```bash\npython3 tools/run.py docs/setup.md\n```\n"
+            "Link [setup](docs/setup.md) and code `tools/run.py` are covered forms.\n"
+        )
+        self.assertEqual(extract_naked_pointers(text), [])
+
+    def test_naked_pointer_finding_fires_on_instruction_docs(self) -> None:
+        write(self.fx.project / "AGENTS.md", "# Project\n\nBefore coding read docs/setup.md.\n")
+        policy = run_policy(self.fx.registry(), self.fx.config())
+        hits = [item for item in policy["findings"] if item["rule"] == "naked-pointer"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["severity"], "medium")
+        self.assertEqual(hits[0]["evidence"]["paths"], ["docs/setup.md"])
+        self.assertEqual(policy["stats"]["naked_pointers"], 1)
 
     def test_waivers_silence_only_the_named_rule_and_path(self) -> None:
         write(

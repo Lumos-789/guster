@@ -124,6 +124,23 @@ A dimension with no evidence is reported as `n/a` and dropped from the weighted
 sum instead of scoring 1.0: an empty denominator means "not measured", not
 "perfect". When every dimension of a scope is empty, CHI itself is `n/a`.
 
+## Context format spec
+
+The metrics are static — filename stems, content hashes, path resolution, git
+dates — so they only see documents that keep the format contract. The contract
+is written down and versioned: [`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)
+(spec_version 1, rules `CTX-01..08`, markdownlint-style stable IDs). It follows
+open conventions instead of inventing new ones: `AGENTS.md` for instruction
+files ([agents.md](https://agents.md)), llms.txt-shaped link indexes
+([llmstxt.org](https://llmstxt.org)), stable rule IDs like markdownlint.
+
+A document that ignores the contract is not scored lower — it is invisible: a
+naked path in prose never reaches the pointer check, a date written as "last
+week" falls back to git, an index without filenames counts as missing. Since
+0.7.0 the `naked-pointer` finding closes that gap from the other side: file
+paths left outside a link or code span in an instruction or index document are
+reported, so the unwritable form is also the flagged form.
+
 ## Scopes
 
 | Level | Command | Scored dimensions |

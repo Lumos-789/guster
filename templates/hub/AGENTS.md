@@ -14,6 +14,7 @@ This repository is the data plane for agent context. The Guster plugin reads it;
 - One topic per knowledge file. Put durable, reusable knowledge in `{{KNOWLEDGE_PATH}}/general/` or `{{KNOWLEDGE_PATH}}/projects/`.
 - Register a project in `{{PROJECTS_PATH}}/_registry.md` before adding `{{PROJECTS_PATH}}/{slug}.md`.
 - State documents must carry `最后更新: YYYY-MM-DD`.
+- File paths are markdown links or inline code, never naked in prose, so `guster doctor` can verify them (CTX-03).
 - Code and tests remain the source of truth; this hub stores decisions and pointers.
 - Never store credentials, company secrets, generated caches or scratch files here.
 

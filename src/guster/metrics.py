@@ -172,6 +172,7 @@ def compute_metrics(registry: Dict[str, Any], policy_result: Dict[str, Any]) -> 
             "pointers_checked": int(stats.get("pointers_checked", 0)),
             "pointers_valid": int(stats.get("pointers_valid", 0)),
             "broken_pointers": int(stats.get("broken_pointers", 0)),
+            "naked_pointers": int(stats.get("naked_pointers", 0)),
             "pointer_files_total": int(stats.get("pointer_files_total", 0)),
             "pointer_files_scanned": int(stats.get("pointer_files_scanned", 0)),
             "secret_total": int(stats.get("secret_total", 0)),

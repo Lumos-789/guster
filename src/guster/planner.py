@@ -107,7 +107,10 @@ def plan_init_project(project_root: Path) -> Dict[str, Any]:
                 "## Boundaries\n\n"
                 "- Code and tests are the source of truth for behavior.\n"
                 "- Do not put credentials in this repository.\n"
-                "- Do not commit `.agents/` unless the repository explicitly chooses to share it.\n",
+                "- Do not commit `.agents/` unless the repository explicitly chooses to share it.\n\n"
+                "## Context format\n\n"
+                "File paths in this file and `.agents/README.md` are markdown links or inline code, "
+                "never naked in prose, so `guster doctor` can verify them (CTX-03).\n",
             )
         )
     return build_plan(

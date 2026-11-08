@@ -436,6 +436,41 @@ def _strip_pointer(pointer: str) -> str:
     return pointer
 
 
+# Path-shaped token in prose: optional ~/ ./ ../ / prefix, then at least one
+# path segment. The lookbehind keeps the match from starting inside a word, a
+# URL or an email; CJK characters do not block, so `见docs/x.md` still matches.
+NAKED_POINTER_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_.:/`~@-])(?:~/|\.{1,2}/|/)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+"
+)
+
+
+def extract_naked_pointers(text: str) -> List[str]:
+    """File-shaped paths left in prose after links, code spans and code blocks are removed.
+
+    Only suffix-bearing paths count: directory references in prose (a bare
+    `~/some/repo`) name a place far more often than they point at a read, and
+    flagging them would drown the signal.
+    """
+    residual = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    residual = re.sub(r"\[[^\]]*\]\([^)]+\)", "", residual)
+    residual = re.sub(r"`[^`\n]+`", "", residual)
+    found: List[str] = []
+    for match in NAKED_POINTER_TOKEN_RE.finditer(residual):
+        token = match.group(0).rstrip(".,;:!?\"')")
+        if not token or token in found:
+            continue
+        if _is_placeholder(token):
+            continue
+        if token.startswith(("http://", "https://", "mailto:", "tel:", "#")):
+            continue
+        if token.startswith(("/tmp/", "/private/tmp/", "/var/folders/")):
+            continue
+        if Path(token).suffix.lower() not in POINTER_SUFFIXES:
+            continue
+        found.append(token)
+    return found
+
+
 def find_repo_root(start: Path) -> Optional[Path]:
     """Nearest enclosing git work tree; `.claude/` and `.agents/` docs address the repo root."""
     cursor = start
