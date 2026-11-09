@@ -29,6 +29,7 @@ that writes the document.
 | CTX-06 | One home per fact. Same topic, same filename stem; the second home becomes a pointer to the first. Copies are either byte-identical or a mistake. | `duplicate-canonical`, `skill-copy-drift` |
 | CTX-07 | Skill frontmatter carries `name` and `description` only; one trigger sentence, ≤500 chars each, ≤6,000 chars across the library. | `skill-budget` |
 | CTX-08 | Credentials appear by reference — a path in the registry under the canonical root — never as a value in a document, a config or git. | `secret-in-git`, `secret-outside-root`, `secret-inline`, `secret-undeclared`, `secret-missing` |
+| CTX-09 | A knowledge note may carry YAML front-matter following the Obsidian properties convention (the interchange format Foam/Quartz/Logseq also accept). The header is opt-in: it is machine-checked only when it declares `type:`. A checked header must parse and carry a machine-readable date (`updated`/`date`/`lastmod`/`created` as YYYY-MM-DD), and the note's body then joins the CTX-03 pointer scan — truth sources go in the body as links, never as invented header keys. | `note-header-malformed`, `broken-pointer`, `naked-pointer` |
 
 ## Why a format contract
 
@@ -48,6 +49,11 @@ When creating or moving a context asset:
    in prose; add when-to-read in the same sentence.
 3. Add the date line before saving a state document; run `guster doctor`
    after edits — a new finding names the rule you just broke.
+4. A note that summarizes knowledge whose truth lives elsewhere (a pointer
+   card) opts into CTX-09: standard front-matter (`type: pointer`, a date
+   key, `tags` if useful) plus a truth section of ordinary markdown links.
+   Volatile values (latest numbers, current picks) stay out of the card and
+   are read from the truth sources instead.
 
 ## Versioning
 

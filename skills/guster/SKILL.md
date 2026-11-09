@@ -124,7 +124,7 @@ tracked files, host limitations), not to skip ordinary work.
 ## Format spec
 
 Context assets follow the versioned format contract in `reference/spec.md`
-(CTX-01..08): `AGENTS.md` instruction files, llms.txt-shaped indexes,
+(CTX-01..09): `AGENTS.md` instruction files, llms.txt-shaped indexes,
 machine-verifiable pointers, machine-readable dates, the six `.agents/` slots,
 one home per fact, skill metadata budgets, credentials by reference. When
 writing or moving a context asset, follow the spec; when a doctor finding

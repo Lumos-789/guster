@@ -129,7 +129,7 @@ sum instead of scoring 1.0: an empty denominator means "not measured", not
 The metrics are static — filename stems, content hashes, path resolution, git
 dates — so they only see documents that keep the format contract. The contract
 is written down and versioned: [`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)
-(spec_version 1, rules `CTX-01..08`, markdownlint-style stable IDs). It follows
+(spec_version 1, rules `CTX-01..08` plus `CTX-09` structured note header in 0.7.2, markdownlint-style stable IDs). It follows
 open conventions instead of inventing new ones: `AGENTS.md` for instruction
 files ([agents.md](https://agents.md)), llms.txt-shaped link indexes
 ([llmstxt.org](https://llmstxt.org)), stable rule IDs like markdownlint.

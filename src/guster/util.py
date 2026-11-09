@@ -351,6 +351,73 @@ def git_last_commit_dates(root: Path) -> Optional[Dict[str, str]]:
     return dates
 
 
+NOTE_DATE_KEYS = ("updated", "date", "lastmod", "created")
+_NOTE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[T ][\d:]+)?")
+
+
+def parse_note_header(text: str) -> Optional[Dict[str, Any]]:
+    """Parse a knowledge note's YAML front-matter (CTX-09).
+
+    Follows the Obsidian properties convention — the interchange format the
+    open-source markdown knowledge bases (Foam, Quartz, Logseq) all accept.
+    Hand-rolled for the simple subset (scalar keys, one list per key, ``#``
+    comments) because the CLI runs on stock Python without third-party deps.
+
+    Returns None when the text has no front-matter or declares no ``type`` —
+    the structured header is opt-in. A dict with ``_malformed`` reports a
+    header that opted in but cannot be parsed.
+    """
+    if not text.startswith("---"):
+        return None
+    lines = text.splitlines()
+    keys: Dict[str, Any] = {}
+    list_key: Optional[str] = None
+    end: Optional[int] = None
+    for i in range(1, min(len(lines), 80)):
+        line = lines[i]
+        if line.strip() == "---":
+            end = i
+            break
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("- ") and list_key is not None:
+            value = stripped[2:].split("#", 1)[0].strip()
+            if value:
+                keys[list_key].append(value)
+            continue
+        match = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", stripped)
+        if not match:
+            return {"_malformed": True, "line": i + 1, "text": stripped[:60]}
+        key = match.group(1)
+        value = match.group(2).split("#", 1)[0].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if value:
+            keys[key] = value
+            list_key = None
+        else:
+            keys[key] = []
+            list_key = key
+    if end is None:
+        return {"_malformed": True, "line": len(lines), "text": "front-matter not closed"}
+    note_type = keys.get("type")
+    if isinstance(note_type, list):
+        note_type = note_type[0] if note_type else ""
+    if not note_type or not str(note_type).strip().strip("[]"):
+        return None
+    return keys
+
+
+def note_header_date(header: Dict[str, Any]) -> Optional[str]:
+    """First machine-readable date value among the convention's date keys."""
+    for key in NOTE_DATE_KEYS:
+        value = header.get(key)
+        if isinstance(value, str) and _NOTE_DATE_RE.match(value.strip()):
+            return value.strip()
+    return None
+
+
 def extract_pointers(text: str) -> List[str]:
     text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
     pointers: List[str] = []

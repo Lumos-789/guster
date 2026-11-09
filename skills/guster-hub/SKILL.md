@@ -63,6 +63,7 @@ guster doctor --scope hub
 - Register a project in `projects/_registry.md`, then create `projects/{slug}.md`.
 - Add a tool only when it is a run-once command: one directory with its own `AGENTS.md`, then a row in `tools/README.md`.
 - Put `最后更新: YYYY-MM-DD` in every state document.
+- Optional structured header (CTX-09): front-matter that declares `type:` plus a date key (Obsidian properties convention) opts the note into machine checks. Keep truth sources as body markdown links, never as invented header keys.
 
 ## Existing hub
 

@@ -10,11 +10,14 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from .discover import ScanConfig, STANDARD_AGENTS_SLOTS, in_scope_path, scope_roots
 from .layout import load_waivers, resolve_hub_layout
 from .util import (
+    NOTE_DATE_KEYS,
     age_days,
     extract_naked_pointers,
     extract_pointers,
     git_last_commit_dates,
+    note_header_date,
     parse_date,
+    parse_note_header,
     read_text,
     relative,
     resolve_pointer,
@@ -123,6 +126,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         "state_docs_fresh_declared": 0,
         "state_docs_fresh_from_git": 0,
         "duplicate_knowledge": 0,
+        "note_headers_total": 0,
         "governance_docs": len(registry.get("governance_docs", [])),
         "misplaced_entries": 0,
         "resident_entries": 0,
@@ -296,6 +300,46 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
             )
         )
 
+    # Structured note headers (CTX-09). Opt-in: only notes whose front-matter
+    # declares a ``type:`` are checked, so legacy prose notes never fire. The
+    # format follows the Obsidian properties convention (see reference/spec.md);
+    # truth pointers live in the body as CTX-03 links, not in the header.
+    structured_notes: List[Dict[str, Any]] = []
+    for item in knowledge:
+        if Path(item["path"]).suffix.lower() != ".md":
+            continue
+        text = read_text(Path(item["path"]), limit=200_000)
+        header = parse_note_header(text)
+        if header is None:
+            continue
+        stats["note_headers_total"] += 1
+        structured_notes.append(item)
+        problems: List[str] = []
+        if header.get("_malformed"):
+            problems.append(
+                f"front-matter cannot be parsed (line {header.get('line')}: "
+                f"{header.get('text')})"
+            )
+        else:
+            if not note_header_date(header):
+                problems.append(
+                    "no machine-readable date (one of "
+                    f"{', '.join(NOTE_DATE_KEYS)} as YYYY-MM-DD)"
+                )
+        if problems:
+            findings.append(
+                finding(
+                    "note-header-malformed",
+                    "medium",
+                    "Structured note header is not well-formed",
+                    item["path"],
+                    "; ".join(problems) + ".",
+                    "Fix the front-matter (Obsidian properties convention: type + a "
+                    "date key), or drop the type key to make it a plain note.",
+                    {"problems": problems},
+                )
+            )
+
     # Project .agents layout
     for project in projects:
         if not project.get("agents_dir"):
@@ -466,6 +510,12 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     ]
     broken_by_file: List[Dict[str, Any]] = []
     naked_by_file: List[Dict[str, Any]] = []
+    # Structured notes (CTX-09) opt their whole body into pointer checks, so a
+    # pointer card's truth links are verified like any CTX-03 pointer.
+    seen_pointer_paths = {item["path"] for item in pointer_files}
+    pointer_files += [
+        item for item in structured_notes if item["path"] not in seen_pointer_paths
+    ]
     stats["pointer_files_total"] = len(pointer_files)
     scanned_pointer_files = pointer_files[:200]
     stats["pointer_files_scanned"] = len(scanned_pointer_files)

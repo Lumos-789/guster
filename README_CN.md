@@ -116,7 +116,7 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 
 ## 上下文格式规范
 
-指标全是静态的——文件名主干、内容哈希、路径解析、git 日期——所以只有守住格式契约的文档才被测得到。契约本身已写成文档并版本化：[`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)（spec_version 1，规则 `CTX-01..08`，markdownlint 式稳定编号）。它遵循开源惯例而不是另造一套：指令文件用 `AGENTS.md`（[agents.md](https://agents.md) 标准）、索引文件用 llms.txt 形态的链接列表（[llmstxt.org](https://llmstxt.org)）、规则编号学 markdownlint。
+指标全是静态的——文件名主干、内容哈希、路径解析、git 日期——所以只有守住格式契约的文档才被测得到。契约本身已写成文档并版本化：[`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)（spec_version 1，规则 `CTX-01..08`（0.7.2 增 `CTX-09` 结构化条目头），markdownlint 式稳定编号）。它遵循开源惯例而不是另造一套：指令文件用 `AGENTS.md`（[agents.md](https://agents.md) 标准）、索引文件用 llms.txt 形态的链接列表（[llmstxt.org](https://llmstxt.org)）、规则编号学 markdownlint。
 
 不守契约的文档不是被扣分——而是彻底隐身：正文里裸写的路径永远到不了指针检查、「上周更新」落到 git 时间兜底、索引里没有文件名等于没索引。0.7.0 起 `naked-pointer` finding 从另一侧堵上这个缺口：指令文档/索引页里留在链接和代码记号之外的文件路径会被直接报告，写不规范的形态同时也是会被标记的形态。
 

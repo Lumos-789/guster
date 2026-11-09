@@ -2,6 +2,18 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.7.2 — 2026-11-09
+
+- **CTX-09 structured note headers** (opt-in): knowledge notes may carry YAML
+  front-matter following the Obsidian properties convention — the interchange
+  format Foam/Quartz/Logseq also accept, so guster defines no schema of its
+  own. A header that declares `type:` is machine-checked (`note-header-malformed`):
+  it must parse and carry a machine-readable date (`updated`/`date`/`lastmod`/
+  `created`, YYYY-MM-DD), and the note's body then joins the CTX-03 pointer
+  scan so a pointer card's truth links are verified. Truth sources live in the
+  body as ordinary links, never as invented header keys. Legacy prose notes
+  without `type:` are unaffected.
+
 ## 0.7.1 — 2026-11-09
 
 - Fixed the placement tree in `reference/framework.md`: the three arrows for

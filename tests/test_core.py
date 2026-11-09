@@ -20,6 +20,7 @@ from guster.hub import attach_hub, init_hub, validate_hub  # noqa: E402
 from guster.metrics import compute_metrics  # noqa: E402
 from guster.planner import load_plan, plan_init_project, plan_move  # noqa: E402
 from guster.policy import extract_filename_date, extract_verified_date, run_policy  # noqa: E402
+from guster.util import note_header_date  # noqa: E402
 from guster.report import render_report  # noqa: E402
 from guster.util import extract_naked_pointers, extract_pointers  # noqa: E402
 
@@ -1221,6 +1222,83 @@ class ExtraSkillRootTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"GUSTER_EXTRA_SKILL_ROOTS": value}):
             roots = extra_skill_roots()
         self.assertEqual(roots, [("good", Path("/tmp/g"))])
+
+
+class StructuredNoteHeaderTests(unittest.TestCase):
+    """CTX-09: opt-in structured note headers (Obsidian properties convention)."""
+
+    def setUp(self) -> None:
+        self.fx = Fixture()
+
+    def tearDown(self) -> None:
+        self.fx.cleanup()
+
+    def _note(self, rel: str, text: str) -> None:
+        write(self.fx.hub / "knowledge" / "general" / rel, text)
+
+    def _policy(self):
+        return run_policy(self.fx.registry(), self.fx.config())
+
+    def test_parse_note_header_variants(self) -> None:
+        from guster.util import parse_note_header
+
+        self.assertIsNone(parse_note_header("# No front-matter\n"))
+        self.assertIsNone(parse_note_header("---\ntitle: x\n---\n"))  # no type: not opted in
+        header = parse_note_header(
+            "---\ntype: pointer\nupdated: 2026-11-09\ntags:\n- a\n- b\n---\n"
+        )
+        self.assertEqual(header["type"], "pointer")
+        self.assertEqual(header["tags"], ["a", "b"])
+        self.assertEqual(note_header_date(header), "2026-11-09")
+        bad = parse_note_header("---\ntype: pointer\nupdated: 2026-11-09\n")
+        self.assertTrue(bad and bad.get("_malformed"))  # fence never closed
+        bad_line = parse_note_header("---\ntype: pointer\nnot a pair\n---\n")
+        self.assertTrue(bad_line and bad_line.get("_malformed"))
+        foam = parse_note_header('---\ntype: "[[pointer]]"\ndate: 2026-11-09\n---\n')
+        self.assertEqual(foam["type"], "[[pointer]]")  # Foam-style link value accepted
+
+    def test_well_formed_header_counts_and_passes(self) -> None:
+        self._note(
+            "card.md",
+            "---\ntype: pointer\nupdated: 2026-11-09\n---\n\n# Card\n\n"
+            "Truth: [a note](a.md).\n",
+        )
+        policy = self._policy()
+        self.assertGreaterEqual(policy["stats"]["note_headers_total"], 1)
+        self.assertFalse(
+            [f for f in policy["findings"] if f["rule"] == "note-header-malformed"]
+        )
+
+    def test_header_without_date_is_malformed(self) -> None:
+        self._note("nodate.md", "---\ntype: fact\n---\n\n# No date\n")
+        policy = self._policy()
+        hits = [
+            f for f in policy["findings"]
+            if f["rule"] == "note-header-malformed" and "nodate.md" in f["path"]
+        ]
+        self.assertEqual(len(hits), 1)
+        self.assertIn("date", hits[0]["message"])
+
+    def test_structured_note_body_links_join_pointer_scan(self) -> None:
+        self._note(
+            "deadlink.md",
+            "---\ntype: pointer\nupdated: 2026-11-09\n---\n\n# Dead\n\n"
+            "Truth: [missing](./missing.md).\n",
+        )
+        policy = self._policy()
+        hits = [
+            f for f in policy["findings"]
+            if f["rule"] == "broken-pointer" and "deadlink.md" in f["path"]
+        ]
+        self.assertEqual(len(hits), 1)
+
+    def test_plain_note_without_header_stays_untouched(self) -> None:
+        self._note("plain.md", "# Plain prose\n\nMentions nope/missing.md path?\n")
+        policy = self._policy()
+        self.assertFalse(
+            [f for f in policy["findings"] if "plain.md" in f.get("path", "")]
+        )
+
 
 
 if __name__ == "__main__":
