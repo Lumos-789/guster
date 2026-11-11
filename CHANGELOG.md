@@ -2,6 +2,25 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.7.3 — 2026-11-11
+
+- **Legacy context reformat playbook** (`skills/guster/reference/reformat.md`):
+  step-by-step guidance for bringing a scattered, pre-spec context site under
+  the format contract — the piece the 0.7.0 spec lacked. Four passes:
+  inventory and classify (doctor findings as the worklist, one destination
+  class per artifact, duplicates pick a canonical copy), placement first
+  (`plan init` for the slots, `plan move` or one hand-written batch plan —
+  apply backs up every path and rolls back), content second (the CTX symptom
+  → transform table: index lines, naked paths to links, date lines, duplicate
+  to pointer card), then verify (`doctor` zero new findings, `score --trend`
+  before/after). Principles are explicit: meaning-preserving (no invented
+  facts), classify-before-touch (garbage is proposed for deletion, not
+  formatted), placement before content (paths final before pointers are
+  written). Deletions and distillations ride the classification table for
+  user approval; company-tracked files are never migration targets.
+- SKILL.md wiring: trigger phrases for scattered/legacy context, a
+  "Reformatting legacy context" section, and the reference entry.
+
 ## 0.7.2 — 2026-11-09
 
 - **CTX-09 structured note headers** (opt-in): knowledge notes may carry YAML

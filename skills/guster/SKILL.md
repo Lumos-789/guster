@@ -1,6 +1,6 @@
 ---
 name: guster
-description: Audit and evolve agent context across projects, skills, tools, knowledge and credential references. Use when the user says 上下文治理/项目上下文/上下文结构/上下文格式/格式规范/整理 .agents/归位/搬迁/断链/健康评分/凭据登记, or asks where a fact, file, skill or credential belongs, or wants a before/after context health score.
+description: Audit and evolve agent context across projects, skills, tools, knowledge and credential references. Use when the user says 上下文治理/项目上下文/上下文结构/上下文格式/格式规范/整理 .agents/归位/搬迁/断链/健康评分/凭据登记, or asks where a fact, file, skill or credential belongs, or wants to reformat scattered legacy context into the standard format, or wants a before/after context health score.
 ---
 
 # Guster
@@ -21,6 +21,7 @@ Use Guster when the user asks:
 - to initialize a project with the standard `.agents/` layout;
 - to migrate task folders into `plans/`, `wiki/`, `evidence/`, `tmp/` or `archive/`;
 - to make context documents machine-verifiable under the context format spec;
+- to reformat scattered, legacy (pre-spec) context into the standard format;
 - for a context health score or a before/after comparison;
 - to install the same context rules on another machine or workspace.
 
@@ -130,9 +131,23 @@ one home per fact, skill metadata budgets, credentials by reference. When
 writing or moving a context asset, follow the spec; when a doctor finding
 fires, it names the rule that was broken.
 
+## Reformatting legacy context
+
+When the target is not a new asset but an inherited mess — a project or hub
+whose context predates the spec — run the playbook in
+`reference/reformat.md`: **inventory and classify** every artifact (doctor
+findings as the worklist, one destination class each) → **placement**
+(`plan init` for the slots, one `plan move` or one batch plan for moves —
+paths final before pointers are written) → **content** (index lines, naked
+paths to links, date lines, duplicates to pointer cards, per the CTX table) →
+**verify** (`doctor` zero new findings, `score --trend` before/after). The
+pass is meaning-preserving; deletions and distillations are proposed in the
+classification table for the user to approve, never silent.
+
 ## References
 
 - `reference/spec.md` — context format spec v1 (CTX rules and their findings).
+- `reference/reformat.md` — legacy context reformat playbook (four passes, classify-before-touch).
 - `reference/framework.md` — 1-3-5-8 framework and placement tree.
 - `reference/metrics.md` — metric definitions, targets and CHI.
 - `reference/placement.md` — user/hub/project directory trees and the git boundary.
