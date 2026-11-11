@@ -18,6 +18,11 @@ Notable changes. Earlier history is in `git log`.
   formatted), placement before content (paths final before pointers are
   written). Deletions and distillations ride the classification table for
   user approval; company-tracked files are never migration targets.
+  Field-tested on two real projects (a migrated repo with a stale cross-repo
+  link and a stray root state doc): the lessons — search referencers by stem
+  before moving, override shape-based slot suggestions by classification,
+  delete `.moved.md` transition pointers after referencers update — are
+  folded back into the playbook.
 - SKILL.md wiring: trigger phrases for scattered/legacy context, a
   "Reformatting legacy context" section, and the reference entry.
 
