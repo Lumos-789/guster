@@ -361,36 +361,61 @@ def parse_note_header(text: str) -> Optional[Dict[str, Any]]:
     Follows the Obsidian properties convention — the interchange format the
     open-source markdown knowledge bases (Foam, Quartz, Logseq) all accept.
     Hand-rolled for the simple subset (scalar keys, one list per key, ``#``
-    comments) because the CLI runs on stock Python without third-party deps.
+    comments, literal/folded block scalars) because the CLI runs on stock
+    Python without third-party deps.
 
     Returns None when the text has no front-matter or declares no ``type`` —
-    the structured header is opt-in. A dict with ``_malformed`` reports a
-    header that opted in but cannot be parsed.
+    the structured header is opt-in, and that gate wins over malformedness,
+    so legacy prose notes that merely open with dashes never report. A dict
+    with ``_malformed`` reports a header that opted in but cannot be parsed.
     """
-    if not text.startswith("---"):
-        return None
     lines = text.splitlines()
+    if not text.startswith("---") or not lines or lines[0].strip() != "---":
+        return None
     keys: Dict[str, Any] = {}
     list_key: Optional[str] = None
+    malformed: Optional[Dict[str, Any]] = None
     end: Optional[int] = None
-    for i in range(1, min(len(lines), 80)):
-        line = lines[i]
+    limit = min(len(lines), 80)
+    index = 1
+    while index < limit:
+        line = lines[index]
         if line.strip() == "---":
-            end = i
+            end = index
             break
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
+            index += 1
             continue
         if stripped.startswith("- ") and list_key is not None:
             value = stripped[2:].split("#", 1)[0].strip()
             if value:
                 keys[list_key].append(value)
+            index += 1
             continue
         match = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", stripped)
         if not match:
-            return {"_malformed": True, "line": i + 1, "text": stripped[:60]}
+            if malformed is None:
+                malformed = {"line": index + 1, "text": stripped[:60]}
+            index += 1
+            continue
         key = match.group(1)
         value = match.group(2).split("#", 1)[0].strip()
+        if value in ("|", ">"):
+            block: List[str] = []
+            index += 1
+            while index < limit:
+                candidate = lines[index]
+                if candidate.startswith("  "):
+                    block.append(candidate[2:])
+                elif not candidate.strip():
+                    block.append("")
+                else:
+                    break
+                index += 1
+            keys[key] = ("\n" if value == "|" else " ").join(block).strip()
+            list_key = None
+            continue
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
         if value:
@@ -399,13 +424,16 @@ def parse_note_header(text: str) -> Optional[Dict[str, Any]]:
         else:
             keys[key] = []
             list_key = key
-    if end is None:
-        return {"_malformed": True, "line": len(lines), "text": "front-matter not closed"}
+        index += 1
     note_type = keys.get("type")
     if isinstance(note_type, list):
         note_type = note_type[0] if note_type else ""
     if not note_type or not str(note_type).strip().strip("[]"):
         return None
+    if malformed is not None:
+        return {"_malformed": True, **malformed}
+    if end is None:
+        return {"_malformed": True, "line": len(lines), "text": "front-matter not closed"}
     return keys
 
 

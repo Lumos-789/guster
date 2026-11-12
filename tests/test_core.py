@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from guster import __version__, cli  # noqa: E402
 from guster.discover import ScanConfig, extra_skill_roots, scan, scan_local_wiki  # noqa: E402
-from guster.executor import apply_plan, init_home, preflight  # noqa: E402
+from guster.executor import ApplyError, apply_plan, init_home, preflight  # noqa: E402
 from guster.hub import attach_hub, init_hub, validate_hub  # noqa: E402
 from guster.metrics import compute_metrics  # noqa: E402
 from guster.planner import load_plan, plan_init_project, plan_move  # noqa: E402
@@ -150,6 +150,44 @@ class GusterCoreTests(unittest.TestCase):
         self.assertTrue((dst / "a.md").is_file())
         self.assertTrue((self.fx.project / ".agents" / "task-x.moved.md").is_file())
         self.assertTrue((Path(result["backup"]) / "002-task-x" / "a.md").is_file())
+
+    def _failing_batch(self, pointer_path) -> dict:
+        # move+pointer, a fresh write, then a write onto a directory the second
+        # op just created — the batch always fails at op 3 and must roll back.
+        agents = self.fx.project / ".agents"
+        return {
+            "id": "batch-fail",
+            "version": 1,
+            "operations": [
+                {
+                    "kind": "move",
+                    "src": str(agents / "task-x"),
+                    "dst": str(agents / "evidence" / "task-x"),
+                    "pointer": {"path": str(pointer_path), "content": "moved\n"},
+                },
+                {"kind": "write", "path": str(agents / "kb" / "n.md"), "content": "# n\n"},
+                {"kind": "write", "path": str(agents / "kb"), "content": "x"},
+            ],
+        }
+
+    def test_apply_rollback_leaves_no_stale_pointer(self) -> None:
+        agents = self.fx.project / ".agents"
+        pointer = agents / "task-x.moved.md"
+        with self.assertRaises(ApplyError) as caught:
+            apply_plan(self._failing_batch(pointer), self.fx.state, dry_run=False, yes=True)
+        self.assertIn("rolled back", str(caught.exception))
+        self.assertTrue((agents / "task-x" / "a.md").is_file())  # source restored
+        self.assertFalse((agents / "evidence" / "task-x").exists())  # destination gone
+        self.assertFalse(pointer.exists())  # no pointer lying about a gone destination
+        self.assertFalse((agents / "kb" / "n.md").exists())  # fresh write undone too
+
+    def test_apply_rollback_restores_existing_pointer(self) -> None:
+        agents = self.fx.project / ".agents"
+        pointer = agents / "task-x.moved.md"
+        write(pointer, "old pointer\n")
+        with self.assertRaises(ApplyError):
+            apply_plan(self._failing_batch(pointer), self.fx.state, dry_run=False, yes=True)
+        self.assertEqual(pointer.read_text(encoding="utf-8"), "old pointer\n")
 
     def test_dry_run_does_not_write(self) -> None:
         target = self.fx.tmp / "dry-project"
@@ -1297,6 +1335,57 @@ class StructuredNoteHeaderTests(unittest.TestCase):
         policy = self._policy()
         self.assertFalse(
             [f for f in policy["findings"] if "plain.md" in f.get("path", "")]
+        )
+
+    def test_parse_note_header_opt_in_wins_over_malformed(self) -> None:
+        from guster.util import parse_note_header
+
+        # CTX-09: no type: declared -> not opted in -> None, never malformed,
+        # whatever the fence looks like (legacy prose notes must stay silent).
+        for text in (
+            "---\ntitle: x\n",                              # fence never closed
+            "---\nsome prose here\nmore prose\n---\n",      # prose inside the fence
+            "----\ntitle: x\n----\n",                       # four-dash opener is no fence
+            "----\ntype: pointer\n----\n",                  # same, even with a type line
+            "---\nplain prose line\n---\n",                 # non key:value line
+        ):
+            self.assertIsNone(parse_note_header(text), text)
+        # Opted-in headers keep reporting malformedness.
+        bad = parse_note_header("---\ntype: pointer\nupdated: 2026-11-09\n")
+        self.assertTrue(bad and bad.get("_malformed"))
+        bad = parse_note_header("---\ntype: pointer\nnot a pair\n---\n")
+        self.assertTrue(bad and bad.get("_malformed"))
+
+    def test_prose_fence_note_without_type_is_not_flagged(self) -> None:
+        self._note("prose.md", "---\nsome prose here\nmore prose\n---\n\n# Prose\n")
+        policy = self._policy()
+        self.assertFalse(
+            [f for f in policy["findings"] if f["rule"] == "note-header-malformed"]
+        )
+        self.assertEqual(policy["stats"].get("note_headers_total", 0), 0)
+
+    def test_parse_note_header_supports_block_scalars(self) -> None:
+        from guster.util import parse_note_header
+
+        literal = parse_note_header(
+            "---\ntype: pointer\nupdated: |\n  2026-11-11\n---\n\nbody\n"
+        )
+        self.assertIsNotNone(literal)
+        self.assertEqual(literal["updated"], "2026-11-11")
+        self.assertEqual(note_header_date(literal), "2026-11-11")
+        folded = parse_note_header("---\ntype: pointer\nupdated: >\n  2026-11-11\n---\n")
+        self.assertEqual(folded["updated"], "2026-11-11")
+
+    def test_block_scalar_note_counts_and_passes(self) -> None:
+        self._note(
+            "block.md",
+            "---\ntype: pointer\nupdated: |\n  2026-11-09\n---\n\n# Block\n\n"
+            "Truth: [a note](a.md).\n",
+        )
+        policy = self._policy()
+        self.assertGreaterEqual(policy["stats"]["note_headers_total"], 1)
+        self.assertFalse(
+            [f for f in policy["findings"] if f["rule"] == "note-header-malformed"]
         )
 
 

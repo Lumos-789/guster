@@ -2,6 +2,27 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.7.4 — 2026-11-12
+
+- **CTX-09 opt-in now wins over malformedness** (`parse_note_header`): a
+  header that never declares `type:` can no longer report
+  `note-header-malformed`. Previously the parser bailed out as malformed
+  before reaching the `type:` gate, so legacy prose notes that merely open
+  with `---` (unclosed fence, prose inside the fence, a `----` opener, plain
+  non key:value lines) were flagged against the documented contract. The
+  opening fence is now strictly `---` (the same rule `parse_frontmatter`
+  applies), and only headers that opted in can be malformed.
+- Note headers parse literal/folded block scalars (`updated: |` with an
+  indented block, `>` folded), aligning `parse_note_header` with
+  `parse_frontmatter` — a legal block-scalar date was previously reported
+  as a malformed line.
+- **Apply rollback leaves no lying artifacts**: a `move` with a `.moved.md`
+  pointer now registers the pointer write in the undo list — a pre-existing
+  pointer is backed up and restored, a freshly written one is deleted — and
+  fresh `write` targets register an undo entry too. A failed batch now
+  restores sources, removes destinations, pointers and fresh writes, matching
+  the documented "backs up every touched path and rolls back on failure".
+
 ## 0.7.3 — 2026-11-11
 
 - **Legacy context reformat playbook** (`skills/guster/reference/reformat.md`):

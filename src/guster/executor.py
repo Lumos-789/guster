@@ -127,14 +127,20 @@ def apply_plan(
                 pointer = operation.get("pointer")
                 if pointer and pointer.get("path"):
                     pointer_path = Path(pointer["path"])
+                    pointer_backup = backup_dir / f"{index:03d}-pointer-{pointer_path.name}"
+                    if pointer_path.exists():
+                        shutil.copy2(pointer_path, pointer_backup)
+                    undo.append(
+                        ("write", {"path": str(pointer_path), "backup": str(pointer_backup)})
+                    )
                     write_text(pointer_path, pointer.get("content", ""))
                 applied += 1
             elif kind == "write":
                 path = Path(operation["path"])
+                backup = backup_dir / f"{index:03d}-{path.name}"
                 if path.exists():
-                    backup = backup_dir / f"{index:03d}-{path.name}"
                     shutil.copy2(path, backup)
-                    undo.append(("write", {"path": str(path), "backup": str(backup)}))
+                undo.append(("write", {"path": str(path), "backup": str(backup)}))
                 write_text(path, operation.get("content", ""))
                 applied += 1
             else:
