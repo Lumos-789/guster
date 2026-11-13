@@ -33,7 +33,7 @@ Four levels. `--scope` is inferred from `--root` when omitted.
 
 | Level | Command | Covers | Scored dimensions |
 |---|---|---|---|
-| machine | `guster doctor` | every repo under the workspace roots plus the hub | SSR RBR PCR ICR FRS PHR SIR |
+| machine | `guster doctor` | every repo under the workspace roots, declared `zones` and the hub | SSR RBR PCR ICR FRS PHR SIR |
 | hub | `guster doctor --scope hub` | knowledge, project cards, tools, reports, handoffs | SSR ICR FRS PHR |
 | group | `guster doctor --root A --root B [--root C]` | a requirement family or any set of related repos | SSR PCR ICR FRS PHR |
 | project | `guster doctor --root <repo>` | one repository | SSR PCR ICR FRS PHR |

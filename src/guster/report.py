@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import __version__
 from .util import human_bytes, now_iso
 
 
@@ -229,11 +231,29 @@ def render_status(registry: Dict[str, Any], metric_result: Optional[Dict[str, An
         f"generated: {registry.get('generated_at', '?')}",
         f"hub: {registry.get('hub') or '(none)'}",
         f"workspaces: {', '.join(registry.get('workspaces', []))}",
-        f"projects: {projects}",
-        f"skills: {summary.get('skills', 0)} unique / {summary.get('skill_copies', 0)} copies",
-        f"knowledge: {summary.get('knowledge', 0)}",
-        f"credentials: {summary.get('secret_files', 0)} files; {summary.get('inline_bearers', 0)} inline",
     ]
+    zones = registry.get("zones") or []
+    if zones:
+        lines.append(
+            "zones: "
+            + ", ".join(
+                f"{Path(item.get('path', '.')).name}({item.get('profile', 'light')}, {item.get('tools', 0)} tools)"
+                for item in zones
+            )
+        )
+    lines.extend(
+        [
+            f"projects: {projects}",
+            f"skills: {summary.get('skills', 0)} unique / {summary.get('skill_copies', 0)} copies",
+            f"knowledge: {summary.get('knowledge', 0)}",
+            f"credentials: {summary.get('secret_files', 0)} files; {summary.get('inline_bearers', 0)} inline",
+        ]
+    )
+    if plugin.get("version") and plugin.get("version") != __version__:
+        lines.append(
+            f"(registry was scanned by guster {plugin.get('version')}; "
+            f"current CLI is {__version__} — run `guster doctor` to refresh)"
+        )
     if metric_result:
         chi = metric_result.get("chi")
         stamp = metric_result.get("generated_at")

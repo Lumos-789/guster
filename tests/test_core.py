@@ -14,7 +14,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from guster import __version__, cli  # noqa: E402
-from guster.discover import ScanConfig, extra_skill_roots, scan, scan_local_wiki  # noqa: E402
+from guster.discover import (  # noqa: E402
+    ScanConfig,
+    default_roots,
+    extra_skill_roots,
+    scan,
+    scan_local_wiki,
+)
 from guster.executor import ApplyError, apply_plan, init_home, preflight  # noqa: E402
 from guster.hub import attach_hub, init_hub, validate_hub  # noqa: E402
 from guster.metrics import compute_metrics  # noqa: E402
@@ -1387,6 +1393,137 @@ class StructuredNoteHeaderTests(unittest.TestCase):
         self.assertFalse(
             [f for f in policy["findings"] if f["rule"] == "note-header-malformed"]
         )
+
+
+
+class DeclarativeHubZoneTests(unittest.TestCase):
+    """Schema-2 hubs and machine zones: declared, not prescribed."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="guster-decl-"))
+        self.hub = self.tmp / "hub"
+        self.state = self.tmp / "state"
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        init_hub(self.hub, self.state, yes=True, dry_run=False)
+
+    def tearDown(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _manifest(self) -> Path:
+        return self.hub / "hub.yaml"
+
+    def _scan_config(self, **overrides) -> ScanConfig:
+        values = dict(
+            home=self.home,
+            hub=self.hub,
+            roots=[],
+            state_dir=self.state,
+            plugin_root=ROOT,
+            max_depth=3,
+            now="2026-11-14T00:00:00+08:00",
+        )
+        values.update(overrides)
+        return ScanConfig(**values)
+
+    def test_schema2_hub_without_tools_validates(self) -> None:
+        manifest = self._manifest().read_text(encoding="utf-8")
+        self.assertIn("schema_version: 2", manifest)
+        manifest = "\n".join(
+            line for line in manifest.splitlines() if not line.startswith("  tools:")
+        )
+        self._manifest().write_text(manifest, encoding="utf-8")
+        info = validate_hub(self.hub)
+        self.assertTrue(info["ok"], info["errors"])
+        self.assertNotIn("tools", info["paths"])
+
+    def test_schema2_external_tools_section(self) -> None:
+        external = self.tmp / "external-tools"
+        write(external / "README.md", "# External tools\n")
+        write(external / "wrench" / "AGENTS.md", "# Wrench\n")
+        write(external / "wrench" / "README.md", "# Wrench readme\n")
+        manifest = self._manifest().read_text(encoding="utf-8").replace(
+            "  tools: tools", f"  tools: {external}"
+        )
+        self._manifest().write_text(manifest, encoding="utf-8")
+        info = validate_hub(self.hub)
+        self.assertTrue(info["ok"], info["errors"])
+        # External sections belong to the machine view: a hub-scoped run
+        # filters artifacts it cannot raise findings about.
+        registry = scan(self._scan_config())
+        tool_paths = [
+            item["path"]
+            for item in registry["artifacts"]
+            if item.get("kind") == "tool" and item.get("scope") == "project"
+        ]
+        self.assertTrue(any(path.startswith(str(external.resolve())) for path in tool_paths))
+
+    def test_schema2_missing_core_section_rejected(self) -> None:
+        manifest = self._manifest().read_text(encoding="utf-8")
+        manifest = "\n".join(
+            line for line in manifest.splitlines() if not line.startswith("  knowledge:")
+        )
+        self._manifest().write_text(manifest, encoding="utf-8")
+        info = validate_hub(self.hub)
+        self.assertFalse(info["ok"])
+        self.assertTrue(any("knowledge" in item for item in info["errors"]))
+
+    def test_machine_zone_light_scan_governs_without_slots(self) -> None:
+        zone = self.tmp / "zones" / "tools"
+        write(
+            zone / "common" / "hammer" / "AGENTS.md",
+            "# Hammer\n\nSee ~/zones/tools/common/hammer/gone.md for details.\n",
+        )
+        write(zone / "common" / "hammer" / "README.md", "# Hammer readme\n")
+        write(zone / "company" / "saw" / "README.md", "# Saw readme\n")
+        write(zone / "company" / "saw" / ".env", "TOKEN=not-a-real-token\n")
+        config = self._scan_config(
+            zones=[{"path": str(zone), "profile": "light"}],
+        )
+        registry = scan(config)
+        self.assertEqual(registry["zones"][0]["tools"], 2)
+        zone_artifacts = [
+            item for item in registry["artifacts"] if item.get("scope") == "zone"
+        ]
+        self.assertEqual(len(zone_artifacts), 3)
+        secret_paths = {item["path"] for item in registry["secrets"]["files"]}
+        self.assertTrue(any(path.endswith("saw/.env") for path in secret_paths))
+        policy = run_policy(registry, config)
+        reached = [
+            item
+            for item in policy["findings"]
+            if item["rule"] == "naked-pointer" and "hammer" in item["path"]
+        ]
+        self.assertTrue(
+            reached,
+            "zone entry docs must reach pointer checks: the naked ~/path in the "
+            "AGENTS.md is only findable if the zone artifact was scanned",
+        )
+
+    def test_default_roots_drops_private_root(self) -> None:
+        (self.home / "IdeaProjects").mkdir()
+        (self.home / "ZCodeProject").mkdir()
+        roots = default_roots(self.home)
+        self.assertEqual([root.name for root in roots], ["IdeaProjects"])
+        (self.home / "Projects").mkdir()
+        self.assertEqual(
+            [root.name for root in default_roots(self.home)],
+            ["IdeaProjects", "Projects"],
+        )
+
+    def test_zone_config_fails_loud_on_missing_path(self) -> None:
+        from argparse import Namespace
+
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "config.json").write_text(
+            json.dumps({"zones": [{"path": str(self.tmp / "nope"), "profile": "light"}]}),
+            encoding="utf-8",
+        )
+        args = Namespace(hub=None, root=[], scope="auto", state_dir=str(self.state))
+        with self.assertRaises(ValueError):
+            cli.build_config(args)
 
 
 

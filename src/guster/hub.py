@@ -125,21 +125,19 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
         and (hub / "knowledge").is_dir()
         and (hub / "projects").is_dir()
     )
-    required_files = [
-        hub / "AGENTS.md",
-        hub / "README.md",
-        hub / "hub.yaml",
-        layout["knowledge"] / "README.md",
-        layout["projects"] / "_registry.md",
-        layout["tools"] / "README.md",
-    ]
-    required_dirs = [
-        layout["knowledge"],
-        layout["knowledge"] / "general",
-        layout["knowledge"] / "projects",
-        layout["projects"],
-        layout["tools"],
-    ]
+    required_files = [hub / "AGENTS.md", hub / "README.md", hub / "hub.yaml"]
+    required_dirs = []
+    if "knowledge" in layout:
+        required_files.append(layout["knowledge"] / "README.md")
+        required_dirs.extend(
+            [layout["knowledge"], layout["knowledge"] / "general", layout["knowledge"] / "projects"]
+        )
+    if "projects" in layout:
+        required_files.append(layout["projects"] / "_registry.md")
+        required_dirs.append(layout["projects"])
+    if "tools" in layout:
+        required_files.append(layout["tools"] / "README.md")
+        required_dirs.append(layout["tools"])
     for path in required_files:
         if path.is_file():
             continue
@@ -164,7 +162,7 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
         elif (hub / "hub.yaml").is_file():
             errors.append(message)
     else:
-        if manifest.get("schema_version") != "1":
+        if manifest.get("schema_version") not in {"1", "2"}:
             errors.append(f"unsupported hub schema: {manifest.get('schema_version') or '(missing)'}")
         if manifest.get("profile") not in {"lite", "full"}:
             warnings.append(f"unexpected hub profile: {manifest.get('profile') or '(missing)'}")

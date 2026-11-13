@@ -494,8 +494,11 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                 Path(item["path"]).name == "README.md"
                 and (
                     # Project .agents indexes and hub knowledge indexes are
-                    # instruction artifacts, including custom hub layouts.
+                    # instruction artifacts, including custom hub layouts; tool
+                    # entry docs (hub sections and machine zones) carry
+                    # pointers like any other entry document.
                     item.get("kind") == "instruction"
+                    or item.get("kind") == "tool"
                     or item.get("path", "").endswith(
                         (
                             "/knowledge/README.md",
@@ -517,7 +520,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         item for item in structured_notes if item["path"] not in seen_pointer_paths
     ]
     stats["pointer_files_total"] = len(pointer_files)
-    scanned_pointer_files = pointer_files[:200]
+    scanned_pointer_files = pointer_files[:500]
     stats["pointer_files_scanned"] = len(scanned_pointer_files)
     for item in scanned_pointer_files:
         path = Path(item["path"])

@@ -83,6 +83,11 @@ class ScanConfig:
     max_depth: int = 5
     scope: str = "machine"
     now: str = field(default_factory=now_iso)
+    # Declared machine zones (`config.json` `zones`): {"path": ..., "profile": ...}.
+    # "light" zones are tool areas — AGENTS/README artifacts and secrets, no
+    # project slots — so a non-git tool layer is governed without pretending
+    # each tool is a repository.
+    zones: List[Dict[str, str]] = field(default_factory=list)
 
 
 def scope_roots(config: ScanConfig) -> Optional[List[Path]]:
@@ -109,7 +114,7 @@ def in_scope_path(value: str, roots: Sequence[Path]) -> bool:
 
 
 def default_roots(home: Path) -> List[Path]:
-    candidates = [home / "IdeaProjects", home / "ZCodeProject"]
+    candidates = [home / "IdeaProjects", home / "Projects"]
     seen: Set[str] = set()
     roots: List[Path] = []
     for candidate in candidates:
@@ -261,8 +266,14 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
     index_texts = load_index_texts(home, hub, projects)
 
     artifacts: List[Dict[str, Any]] = []
+    zones = [
+        item
+        for item in config.zones
+        if Path(item["path"]).expanduser().is_dir()
+    ]
     if scope != "hub":
         artifacts.extend(scan_project_agents(projects, index_texts, project_tracked))
+        artifacts.extend(scan_zones(zones))
     artifacts.extend(scan_hub_knowledge(hub, index_texts))
     if scope != "hub":
         artifacts.extend(scan_local_wiki(home, index_texts))
@@ -280,6 +291,7 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
         hub,
         projects,
         project_tracked,
+        zones=zones,
         include_home=scope != "hub",
     )
     credential_registry = scan_credential_registry(home)
@@ -299,6 +311,14 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
         "home": str(home),
         "hub": str(hub) if hub else None,
         "workspaces": [str(root) for root in roots],
+        "zones": [
+            {
+                "path": str(Path(item["path"]).expanduser()),
+                "profile": item.get("profile", "light"),
+                "tools": count_zone_tools(Path(item["path"]).expanduser()),
+            }
+            for item in zones
+        ],
         "projects": projects,
         "skills": skills,
         "topics": topics,
@@ -469,7 +489,9 @@ def load_index_texts(home: Path, hub: Optional[Path], projects: Sequence[Dict[st
     if hub:
         layout = resolve_hub_layout(hub)
         texts["hub"] = read_text(layout["knowledge"] / "README.md", limit=2_000_000)
-        texts["tools"] = read_text(layout["tools"] / "README.md", limit=2_000_000)
+        tools_root = layout.get("tools")
+        if tools_root:
+            texts["tools"] = read_text(tools_root / "README.md", limit=2_000_000)
     texts["local_wiki"] = read_text(home / ".agents" / "wiki" / "README.md", limit=2_000_000)
     for project in projects:
         agents_dir = project.get("agents_dir")
@@ -630,7 +652,8 @@ def scan_hub_knowledge(
                 strategy, "state", "state", "project", None, None, tracked, hub
             )
         )
-    for path in iter_files(layout["tools"], suffixes={".md"}, max_depth=3):
+    tools_root = layout.get("tools")
+    for path in iter_files(tools_root, suffixes={".md"}, max_depth=3) if tools_root else []:
         if path.name in {"AGENTS.md", "README.md"}:
             records.append(
                 artifact_record(path, "tool", "capability", "project", None, None, tracked, hub)
@@ -661,6 +684,55 @@ def scan_local_wiki(
                 path.name in index_text,
             )
         )
+    return records
+
+
+def count_zone_tools(root: Path) -> int:
+    """Tool count for a zone summary: flat zones hold tools at depth 1,
+    grouped zones (like common/company) hold them at depth 2."""
+    if not root.is_dir():
+        return 0
+    count = 0
+    for child in sorted(root.iterdir()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        if (child / "AGENTS.md").exists() or (child / "README.md").exists():
+            count += 1
+            continue
+        for grandchild in sorted(child.iterdir()):
+            if not grandchild.is_dir() or grandchild.name.startswith("."):
+                continue
+            if (grandchild / "AGENTS.md").exists() or (grandchild / "README.md").exists():
+                count += 1
+    return count
+
+
+def scan_zones(zones: Sequence[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """Light-profile zone scan: entry docs and nothing else.
+
+    A declared tool zone is not a project tree. The light profile collects
+    AGENTS.md/README.md so pointer health and freshness can see them, and the
+    caller feeds the zone root to the secret scan; slot compliance never
+    applies because a tool is not a repository with `.agents/` slots.
+    """
+    records: List[Dict[str, Any]] = []
+    for zone in zones:
+        root = Path(zone["path"]).expanduser()
+        for path in iter_files(root, suffixes={".md"}, max_depth=3):
+            if path.is_symlink() or path.name not in {"AGENTS.md", "README.md"}:
+                continue
+            records.append(
+                artifact_record(
+                    path,
+                    "tool",
+                    "capability",
+                    "zone",
+                    None,
+                    None,
+                    None,
+                    root,
+                )
+            )
     return records
 
 
@@ -759,6 +831,7 @@ def scan_secret_files(
     hub: Optional[Path],
     projects: Sequence[Dict[str, Any]],
     project_tracked: Dict[str, Optional[Set[str]]],
+    zones: Sequence[Dict[str, str]] = (),
     include_home: bool = True,
 ) -> List[Dict[str, Any]]:
     candidates: List[Path] = []
@@ -771,11 +844,13 @@ def scan_secret_files(
                     if path.is_file() and path.suffix.lower() != ".md"
                 )
     if hub:
-        tools_root = resolve_hub_layout(hub)["tools"]
-        if tools_root.is_dir():
+        tools_root = resolve_hub_layout(hub).get("tools")
+        if tools_root and tools_root.is_dir():
             for path in iter_files(tools_root, max_depth=3):
                 if path.name in SECRET_SUFFIX_NAMES or path.name.startswith("credentials.") or path.name.endswith(".local.json"):
                     candidates.append(path)
+    for zone in zones:
+        candidates.extend(find_env_files(Path(zone["path"]).expanduser()))
     for project in projects:
         candidates.extend(find_env_files(Path(project["path"])))
 

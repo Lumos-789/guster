@@ -90,6 +90,21 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
         state_dir = base_state / "scoped" / hashlib.sha1(key.encode()).hexdigest()[:10]
 
     plugin_root = Path(__file__).resolve().parents[2]
+    zones: List[Dict[str, str]] = []
+    raw_zones = local.get("zones", []) if isinstance(local, dict) else []
+    if not isinstance(raw_zones, list):
+        raise ValueError(f"Guster config 'zones' must be a list: {config_path}")
+    for item in raw_zones:
+        if not isinstance(item, dict) or not str(item.get("path", "")).strip():
+            raise ValueError(f"zone entry needs a 'path' in {config_path}: {item!r}")
+        zone_path = Path(str(item["path"])).expanduser()
+        profile = str(item.get("profile", "light"))
+        if not zone_path.is_dir():
+            raise ValueError(f"configured zone does not exist: {zone_path.resolve()}")
+        if profile not in {"light", "full"}:
+            raise ValueError(f"zone profile must be 'light' or 'full': {profile}")
+        zones.append({"path": str(zone_path), "profile": profile})
+
     return ScanConfig(
         home=home,
         hub=hub,
@@ -98,6 +113,7 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
         plugin_root=plugin_root,
         max_depth=int(local.get("scan_max_depth", 5)) if isinstance(local, dict) else 5,
         scope=scope,
+        zones=zones,
     )
 
 

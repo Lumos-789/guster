@@ -2,6 +2,30 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.8.0 — 2026-11-14
+
+- **Declarative hub contract (schema 2)**: `hub.yaml` sections are now
+  declared, not prescribed. A schema-2 hub declares what it has — only
+  `knowledge` and `projects` are mandatory — so a hub without a `tools`
+  section validates instead of failing. Declared sections may point outside
+  the hub with an absolute or `~/` path (validated for existence, not
+  containment). Schema-1 manifests behave exactly as before.
+- **Machine zones with governance profiles** (`config.json` `zones`):
+  `{path, profile}` entries describe tool areas that are not repositories.
+  The `light` profile scans AGENTS.md/README.md entry docs (pointer health,
+  freshness) and `.env` secrets without demanding `.agents/` slots — a
+  non-git tool layer is governed without pretending each tool is a project.
+  Registry and `status` carry the zone summary; bad zone config fails loud.
+- **Tool entry docs join pointer checks**: artifacts of kind `tool` (hub
+  tools sections and machine zones) are now pointer-scanned like other entry
+  documents; previously only their AGENTS.md was seen.
+- Pointer scan cap raised from 200 to 500 files per run.
+- `status` warns when the cached registry was written by a different CLI
+  version, and prints declared zones.
+- Default workspace roots no longer include the private `~/ZCodeProject`;
+  candidates are `~/IdeaProjects` and `~/Projects` (config overrides).
+- `hub init` template now emits a schema-2 manifest.
+
 ## 0.7.4 — 2026-11-12
 
 - **CTX-09 opt-in now wins over malformedness** (`parse_note_header`): a
