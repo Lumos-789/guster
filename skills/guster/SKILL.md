@@ -19,6 +19,7 @@ Use Guster when the user asks:
 - where a file, skill, tool, project card, knowledge note or credential reference belongs;
 - to audit drift, duplicates, broken pointers, budgets or stale state;
 - to initialize a project with the standard `.agents/` layout;
+- to onboard a new project — place it, scaffold it and register it (see below);
 - to migrate task folders into `plans/`, `wiki/`, `evidence/`, `tmp/` or `archive/`;
 - to make context documents machine-verifiable under the context format spec;
 - to reformat scattered, legacy (pre-spec) context into the standard format;
@@ -67,7 +68,11 @@ Rules:
 Workspace writes are gated behind a plan and `--yes`. Reading is not fully
 read-only: every scanning command refreshes `~/.agents/guster/registry.json`,
 `doctor` also writes `findings.json`, and `score` appends `metrics.jsonl`.
-`--no-write` skips that command's own state file for `scan`, `doctor` and `score`.
+`--no-write` skips that command's own state file for `scan`, `doctor`, `score`
+and `check`.
+
+For a human-driven patrol, `guster check` runs scan → doctor → score with the
+trend in one pass; its exit code carries the doctor semantics.
 
 ## Commands
 
@@ -77,6 +82,10 @@ guster scan --root ~/Projects --json
 guster doctor
 guster score --trend
 guster score --fail-under 80   # optional gate: exit 2 when CHI is below the target
+guster check                   # scan + doctor + score --trend in one pass
+guster zones list              # configured machine zones
+guster zones add <dir> [--profile light|full]
+guster zones remove <dir>
 guster plan findings
 guster plan move --from <src> --to <dst>
 guster plan init --project <path>
@@ -98,7 +107,10 @@ guster upgrade
 - **Never persist or print credential values.** Paths, variable names and redacted forms only.
 - **Never auto-commit, auto-push or auto-deploy.**
 - **Never apply a plan without explicit confirmation.**
-- **Never treat a company repository's tracked files as ordinary migration targets.**
+- **Never treat tracked files you do not own or have no authority over as
+  ordinary migration targets** — the test is ownership/authority over the
+  tracked files (a shared or employer repository usually fails it), not the
+  word "company".
 - **Fail loud** on an unknown workspace, malformed plan or missing backup.
 - Prefer no-focus, CLI-only operation. Do not activate apps or switch Spaces.
 - If the scan finds a credential in git, stop structural work and report it as critical.
@@ -119,17 +131,52 @@ doctor:
 `path` is optional; without it the whole rule is waived. Every waiver needs a
 `reason` — a malformed block fails loud. Waived findings still appear in
 `doctor --json` and in the report's `Waived` section, so the decision stays
-visible. Use a waiver only when the fix is outside your authority (company
-tracked files, host limitations), not to skip ordinary work.
+visible. Use a waiver only when the fix is outside your authority (tracked
+files owned upstream, host limitations), not to skip ordinary work.
+
+A waiver greens the gate, not the score: waived findings no longer set the
+`doctor` exit code, but metrics are computed from the registry before waivers
+apply, so CHI does not improve. A waived problem is an acknowledged problem,
+not a healthy one.
 
 ## Format spec
 
 Context assets follow the versioned format contract in `reference/spec.md`
-(CTX-01..09): `AGENTS.md` instruction files, llms.txt-shaped indexes,
+(CTX-01..10): `AGENTS.md` instruction files, llms.txt-shaped indexes,
 machine-verifiable pointers, machine-readable dates, the six `.agents/` slots,
-one home per fact, skill metadata budgets, credentials by reference. When
-writing or moving a context asset, follow the spec; when a doctor finding
-fires, it names the rule that was broken.
+one home per fact, skill metadata budgets, credentials by reference, and the
+machine-readable project registry table. When writing or moving a context
+asset, follow the spec; when a doctor finding fires, it names the rule that
+was broken.
+
+## New project onboarding
+
+When the user starts a new project (新项目开张/立项/开新仓), the goal is that it
+lands in the right place, gets the standard `.agents/` layout and shows up in
+the hub registry — with the user confirming every structural step. This is
+orchestration of existing commands, not new machinery.
+
+1. **Inventory the layout** — `guster status --json` (or read
+   `~/.agents/guster/config.json`): configured `roots`, `zones`, attached hub.
+   With no config yet the report banner names the auto-scanned roots; suggest
+   `guster init` to pin them before adding a project.
+2. **Propose a placement** — under a configured root or zone the user already
+   governs, never a new top-level directory of your own invention. Naming and
+   sub-structure follow the user's own conventions (their instruction files,
+   their existing registry rows), not ours.
+3. **User confirms the path** before anything is created.
+4. **Create** — `mkdir` the directory; `git init` and all other git operations
+   follow the user's own git conventions (Guster never runs git). Then
+   scaffold the standard layout with `guster init --project <path>` — the
+   default dry run lists the tree it will create, which also catches typos in
+   the path — and apply with `--yes` once the user has read it.
+5. **Register** — draft a CTX-10 row for the hub's `projects/_registry.md`
+   (slug, display name, project path, note) and hand it to the user to paste;
+   Guster does not edit hub content itself.
+6. **Close the loop** — `guster scan` so the project enters the machine table,
+   then `guster doctor`: zero new findings (placement, registry row, freshness)
+   is the definition of done. `guster check` adds a score baseline in the same
+   pass.
 
 ## Reformatting legacy context
 
@@ -154,10 +201,10 @@ classification table for the user to approve, never silent.
 
 ## Exit codes
 
-- `0`: success (including `doctor` with no high/critical findings).
-- `1`: tool error — unreadable or malformed plan, missing workspace root, unreadable
-  or non-object config; `hub status` also returns 1 when the hub is invalid.
-- `2`: `doctor` found high (but no critical) findings; `hub validate` failed the
-  lite contract; `link` found broken pointers; `upgrade` found disagreeing versions.
-- `3`: `doctor` found critical findings.
-- `4`: `apply`, `init` or `hub init` could not apply the plan (preflight errors, or `FAILED`).
+| Code | Meaning |
+|---|---|
+| `0` | success — clean run, or findings no worse than `medium` |
+| `1` | tool/config error: malformed or unreadable plan, an apply that failed mid-operation and was rolled back, missing workspace root, invalid `config.json` (non-list `roots`, a bad root/zone/hub path, empty `roots`, no scan candidates — run `guster init`); `hub status` also returns 1 when the attached hub fails its checks |
+| `2` | `doctor`/`check` found `high` (but no `critical`) findings; `score --fail-under` below target or CHI not computable; `hub validate` failed the lite contract; `link` found broken pointers; `upgrade` found disagreeing manifest versions |
+| `3` | `doctor`/`check` found `critical` findings |
+| `4` | `apply`, `init` or `hub init` refused the plan at preflight — nothing was touched (missing move source, existing destination, bad target type) |

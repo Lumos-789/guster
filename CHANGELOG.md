@@ -2,6 +2,69 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.9.0 — 2026-11-14
+
+The "installed and fully usable" release: the new-user journey is closed end
+to end — first run, configuration, onboarding a project, and the patrol loop.
+
+- **First run without a config**: guster probes the conventional roots
+  (`~/Projects`, `~/code`, `~/dev`, `~/src`), scans hits under an
+  "Unconfigured" banner telling you to run `guster init`, and fails loud
+  (exit 1, pointing at `init --root`) when none exists. The silent fallback
+  to scanning the whole home directory is gone. `init` now writes the
+  detected roots instead of hardcoding `~/`; a bare `init` with no candidates
+  requires `--root`.
+- **`guster check`**: `scan` → `doctor` → `score --trend` in one pass, one
+  report; the exit code carries the doctor semantics (2 high, 3 critical).
+  Human-driven patrol only — no scheduled runs.
+- **`guster zones list|add|remove`**: manage the machine zones in
+  `config.json` with the same fail-loud validation as the rest of the config.
+- **Config validation is uniform**: `roots` must be a list of existing
+  absolute paths (a bare string is a type error, never a list of characters),
+  `roots: []` is rejected, as are relative paths, missing zone directories
+  and a `hub` that is not a directory.
+- **Default hub de-privatized**: nothing defaults to a private layout anymore;
+  without a config there is no hub and the banner says so. `hub status`
+  prints "no hub attached" and exits 0; `--hub` pointing at a non-hub
+  directory is a `hub-manifest-missing` finding instead of a silent clean
+  report. Hub wording: "missing" → "absent".
+- **Registry drift (CTX-10)**: the machine table (`registry.json`), the hub's
+  human table (`projects/_registry.md`, read through its path column) and the
+  git roots on disk are three-way diffed; dead rows, unscanned rows and
+  unregistered projects are findings, never a CHI dimension. `host:/path`
+  remote rows are counted apart.
+- **Data safety**: state writes are atomic (tmp + `os.replace`) and serialized
+  by an flock on `<state_dir>/.lock`; `--no-write` genuinely suppresses the
+  state file of `scan`, `doctor`, `score` and `check`; a corrupt registry
+  warns and rescans instead of silently self-healing.
+- **Freshness and dates**: `verified_at` is the canonical date key; English
+  prose keys (`Last updated:`/`updated:`) join the Chinese family; without a
+  declared date the ladder falls back to the last git commit and then to file
+  mtime (labeled in the raw column). Index matching requires the backtick
+  form, so `a.md` no longer hits `data.md`.
+- **Credentials**: rows with too few columns raise parse warnings instead of
+  vanishing; `guster credentials` prints bilingual scope labels; the fixed
+  9-column order is documented with a copyable sample (README and spec).
+- **Plans and recovery**: a bad plan reports the expected schema shape;
+  `.moved.md` pointers carry a `verified_at` date; only the newest 10 plan
+  backup directories are kept; a failed apply rolls back automatically, and
+  if the rollback itself fails the error names the backup directory for
+  manual recovery (there is no separate rollback command — the README now
+  says exactly this).
+- **Skill**: new "New project onboarding" playbook (inventory roots/zones →
+  propose placement → user confirms → create + `init --project` → draft the
+  CTX-10 registry row → `scan`/`doctor` close the loop; git operations follow
+  the user's own git conventions). Waivers now state explicitly that a waiver
+  greens the gate, not the score. "Company repository" wording is replaced by
+  the mechanism: tracked files you do not own or have no authority over.
+  Private skill references are gone.
+- **Docs**: README/README_CN gain a roots-and-zones configuration chapter
+  (including `scan_max_depth`), the `check` command, a full exit-code table
+  (0–4, shared with the skill), and the four fixed inaccuracies (backups
+  manual recovery, five state files, `export`'s default output path, the
+  credential sample row). Hub templates emit `verified_at` dates. The main
+  `guster --help` carries a one-line epilog about state writes and exit codes.
+
 ## 0.8.0 — 2026-11-14
 
 - **Declarative hub contract (schema 2)**: `hub.yaml` sections are now

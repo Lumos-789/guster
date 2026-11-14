@@ -10,7 +10,8 @@ It is the **control plane** for agent context. A Guster Hub is the optional **da
 - **Diagnoses** resident budgets, skill metadata budgets, copy drift, duplicate canonical sources, orphan knowledge, broken pointers, misplaced task folders, stale state, inline tokens and credentials outside the canonical root.
 - **Scores** context health with seven dimensions and a CHI dashboard.
 - **Plans** structural changes as reviewable JSON plans.
-- **Applies** only with `--yes`, with a backup and rollback path.
+- **Applies** only with `--yes`, backing up every touched path and rolling back
+  automatically when an operation fails.
 - **Initializes** a standard `.agents/` layout for a new project or a new machine.
 - **Scaffolds** a lite Guster Hub when the user does not have a data plane yet.
 
@@ -24,6 +25,9 @@ cd <checkout>
 ./bin/guster doctor
 ./bin/guster score
 ```
+
+`guster check` runs the scan → doctor → score (with trend) pass as one command
+when you want the whole picture at once.
 
 The CLI is Python 3.9+ and has no third-party Python dependencies.
 
@@ -41,6 +45,8 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster scan` | Discover context assets and write `registry.json` |
 | `guster doctor` | Run policy checks and write `findings.json` |
 | `guster score` | Compute metrics and CHI; append `metrics.jsonl`. `--fail-under N` turns it into a gate (exit 2) |
+| `guster check` | `scan` + `doctor` + `score --trend` in one pass; exit code carries the doctor semantics |
+| `guster zones list/add/remove` | Manage the machine zones in `config.json` |
 | `guster plan findings` | Turn findings into a review checklist |
 | `guster plan move` | Plan a move with backup and pointer |
 | `guster plan init` | Plan a standard `.agents/` layout |
@@ -54,6 +60,42 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster export` | Export a redacted Markdown/JSON report |
 | `guster credentials` | List registered credentials by scope (company / personal) |
 | `guster upgrade` | Check Codex/ZCode/package manifest versions |
+
+## Configuration: roots and zones
+
+`~/.agents/guster/config.json` declares where your context lives:
+
+```json
+{
+  "version": 1,
+  "roots": ["/home/me/Projects"],
+  "zones": [{ "path": "/home/me/tools", "profile": "light" }],
+  "scan_max_depth": 5
+}
+```
+
+- **`roots`** — the workspace roots scanned for git repositories. Must be a
+  list of existing absolute paths; a bare string, an empty list, a relative
+  path or a missing directory fails loud instead of being reinterpreted.
+- **`hub`** — the attached Guster Hub path (written by `hub init`/`hub attach`).
+- **`scan_max_depth`** — how deep under each root the scanner walks looking
+  for git repositories (default 5). Raise it for deeply nested layouts, lower
+  it to speed up huge trees.
+- **`zones`** — tool areas that are not repositories: a tools directory you
+  want governed without pretending each tool is a project. A zone is scanned
+  light-style: its `AGENTS.md`/`README.md` entry docs join the pointer and
+  freshness checks, its `.env` files join the secret scan, and `.agents/`
+  slot compliance never applies. `profile` is recorded and must be
+  `light` or `full`; the scan itself is light for every zone today.
+
+Manage zones with the `zones` subcommand (`list`, `add <dir> --profile`,
+`remove <dir>`); it writes `config.json` and applies the same validation.
+
+**First run without a config**: guster probes the conventional directories
+`~/Projects`, `~/code`, `~/dev` and `~/src`. Hits are scanned with an
+"Unconfigured" banner telling you to run `guster init` to pin them; if none
+exists the command fails loud (exit 1) pointing at
+`guster init --root <path>`. Guster never silently scans your home directory.
 
 ## Lite Hub
 
@@ -107,10 +149,12 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
   project root (`projects/`), `handoff/`, `provision/` and `.agents/plans/`
   that were verified within the 90-day SLA. The denominator is those four
   prefixes only — a hub `reports/` file or a machine-level note is not state.
-  The date comes from `verified_at`, a `最后更新` line in the first 40 lines, a
-  date that opens the filename (`2026-11-05-…`, `20261105-…`), or the last git
-  commit of the repository that owns the document. A date buried in prose or a
-  ticket number inside the name is not a freshness claim.
+  The date comes from a declared key — `verified_at` (canonical), the Chinese
+  `最后更新` family or the English `Last updated:`/`updated:` — in the first 40
+  lines, or a date that opens the filename (`2026-11-05-…`, `20261105-…`);
+  without one, the ladder falls back to the owning repository's last git
+  commit, then to file mtime (labeled as such in the raw column). A date
+  buried in prose or a ticket number inside the name is not a freshness claim.
 - **PHR** pointer health rate
 - **SIR** secret isolation rate: credential files plus literal tokens in host
   configuration. Guster does not scan arbitrary file content for token shapes —
@@ -129,7 +173,8 @@ sum instead of scoring 1.0: an empty denominator means "not measured", not
 The metrics are static — filename stems, content hashes, path resolution, git
 dates — so they only see documents that keep the format contract. The contract
 is written down and versioned: [`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)
-(spec_version 1, rules `CTX-01..08` plus `CTX-09` structured note header in 0.7.2, markdownlint-style stable IDs). It follows
+(spec_version 1, rules `CTX-01..10` — `CTX-09` structured note header, `CTX-10`
+machine-readable project registry — markdownlint-style stable IDs). It follows
 open conventions instead of inventing new ones: `AGENTS.md` for instruction
 files ([agents.md](https://agents.md)), llms.txt-shaped link indexes
 ([llmstxt.org](https://llmstxt.org)), stable rule IDs like markdownlint.
@@ -176,7 +221,15 @@ Guster reads `~/.agents/credentials/registry.md` and checks it against every cre
   than clean.
 
 The registry holds scope (`company` / `personal`), site, account, kind, location and variable names.
-It never holds values. `guster credentials` prints the split.
+It never holds values. `guster credentials` prints the split. A copyable row
+(column order is fixed — see the format spec; the first six columns are
+required, `keys`/`used_by`/`status` are optional):
+
+```markdown
+| ID | scope | site | account | kind | locations | keys | used_by | status |
+|---|---|---|---|---|---|---|---|---|
+| example-host | personal | example.com | me@example.com | token | `~/.agents/credentials/example-host.env` | `EXAMPLE_HOST_TOKEN` | my-cli | active |
+```
 
 ## The eight planes
 
@@ -191,12 +244,25 @@ It never holds values. `guster credentials` prints the split.
 
 ## Safety
 
-- Read-only on your workspace by default. `apply --yes`, `init --yes`, `hub init --yes` and `hub attach` are the only commands that change workspace files or Guster config on their own; `export --out <path>` writes the report path you name.
-- Guster keeps three state files under its state directory (`~/.agents/guster/`, or `scoped/<hash>/`): `registry.json`, which every scanning command rewrites (`status` included, when no registry exists yet), plus `findings.json` from `doctor` and `metrics.jsonl` from `score`. `--no-write` suppresses the state file of `scan`, `doctor` and `score` only.
+- Read-only on your workspace by default. `apply --yes`, `init --yes`, `hub init --yes` and `hub attach` are the only commands that change workspace files or Guster config on their own; `export` always writes a report file — `<state-dir>/context-health.md` by default, or the path you name with `--out` (plus a `.json` sibling with `--format json`).
+- Guster keeps five files under its state directory (`~/.agents/guster/`, or `scoped/<hash>/`): `config.json` (roots/zones/hub, written by `init`, `hub init`/`attach` and `zones`), `registry.json`, which every scanning command rewrites (`status` included, when no registry exists yet), `findings.json` from `doctor`, `metrics.jsonl` from `score`, and the transient `.lock` that serializes concurrent runs. `--no-write` suppresses the state writes of `scan`, `doctor`, `score` and `check` only. (`plans/` and `backups/` are directories, not files.)
 - Credential values are never persisted or printed; scans keep only paths and redacted shapes.
 - No automatic `git add`, `commit`, `push` or deploy.
-- Company/public repository tracked files are not ordinary migration targets.
-- Plans are written to `~/.agents/guster/plans/`; backups to `~/.agents/guster/backups/`.
+- Tracked files you do not own or have no authority over — a shared or employer repository usually qualifies — are not ordinary migration targets.
+- Plans are written to `~/.agents/guster/plans/`. `apply` copies every touched path under `~/.agents/guster/backups/<plan-id>/` before changing it, and rolls back automatically when an operation fails; if the rollback itself fails, the error names that backup directory and you restore by copying the pre-change copies back. Only the newest 10 plan backup directories are kept.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | success — clean run, or findings no worse than `medium` |
+| `1` | tool/config error: malformed or unreadable plan, an apply that failed mid-operation and was rolled back, missing workspace root, invalid `config.json` (non-list `roots`, a bad root/zone/hub path, empty `roots`, no scan candidates — run `guster init`); `hub status` also returns 1 when the attached hub fails its checks |
+| `2` | `doctor`/`check` found `high` (but no `critical`) findings; `score --fail-under` below target or CHI not computable; `hub validate` failed the lite contract; `link` found broken pointers; `upgrade` found disagreeing manifest versions |
+| `3` | `doctor`/`check` found `critical` findings |
+| `4` | `apply`, `init` or `hub init` refused the plan at preflight — nothing was touched (missing move source, existing destination, bad target type) |
+
+The same table ships in the `guster` skill so agents and humans read one
+contract. Treat the exit code as the gate and CHI as the trend.
 
 ## Plugin hosts
 

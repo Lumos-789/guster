@@ -10,7 +10,7 @@ Guster 是一个可分发的 Agent 插件，用来审计和演进整台机器的
 - **诊断** 常驻预算、Skill 元数据预算、副本漂移、多规范源、孤儿知识、断链、错位任务目录、陈旧状态、内联 token 和凭据越界。
 - **评分** 用七个维度和一个 CHI 仪表盘衡量上下文健康。
 - **计划** 把结构变更写成可审阅的 JSON plan。
-- **执行** 只有带 `--yes` 才写入，并且先备份、可回滚。
+- **执行** 只有带 `--yes` 才写入；每个被改路径先备份，操作失败自动回滚。
 - **初始化** 新项目或新机器的标准 `.agents/` 布局。
 - **脚手架** 用户还没有数据面时，生成一个 Lite Guster Hub。
 
@@ -24,6 +24,8 @@ cd <checkout>
 ./bin/guster doctor
 ./bin/guster score
 ```
+
+想一次拿到全貌时，`guster check` 一条命令跑 scan → doctor → score（含趋势）。
 
 CLI 依赖 Python 3.9+，无第三方 Python 依赖。
 
@@ -41,6 +43,8 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster scan` | 发现上下文资产并写 `registry.json` |
 | `guster doctor` | 跑规则并写 `findings.json` |
 | `guster score` | 计算指标和 CHI，追加 `metrics.jsonl`；`--fail-under N` 变成门禁（低于则退出码 2） |
+| `guster check` | `scan` + `doctor` + `score --trend` 一条命令跑完；退出码承接 doctor 语义 |
+| `guster zones list/add/remove` | 管理 `config.json` 里的机器 zone |
 | `guster plan findings` | 把发现转成审阅清单 |
 | `guster plan move` | 计划一次带备份和指针的移动 |
 | `guster plan init` | 计划标准 `.agents/` 布局 |
@@ -54,6 +58,37 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster export` | 导出脱敏 Markdown/JSON 报告 |
 | `guster credentials` | 按范围（公司 / 个人）列出已登记凭据 |
 | `guster upgrade` | 检查 Codex/ZCode/package 版本一致性 |
+
+## 配置：roots 与 zones
+
+`~/.agents/guster/config.json` 声明你的上下文在哪里：
+
+```json
+{
+  "version": 1,
+  "roots": ["/home/me/Projects"],
+  "zones": [{ "path": "/home/me/tools", "profile": "light" }],
+  "scan_max_depth": 5
+}
+```
+
+- **`roots`** —— 扫 git 仓库的工作区根。必须是「已存在的绝对路径」列表；
+  裸字符串、空列表、相对路径、不存在的目录都会 fail-loud，绝不悄悄换解释。
+- **`hub`** —— 已接入的 Guster Hub 路径（由 `hub init`/`hub attach` 写入）。
+- **`scan_max_depth`** —— 在每个 root 下找 git 仓库时的目录递归深度（默认 5）。
+  嵌套深的布局可以调大，巨大的目录树可以调小加速。
+- **`zones`** —— 不是仓库的工具区：想让一个工具目录被治理、又不必把每个工具
+  当成项目。zone 按 light 方式扫描：其 `AGENTS.md`/`README.md` 入口文档进指针
+  与新鲜度检查，`.env` 进密钥扫描，`.agents/` 六槽合规永不适用。`profile`
+  会被记录且只允许 `light`/`full`；当前扫描对所有 zone 都是 light 行为。
+
+zone 用 `zones` 子命令管理（`list`、`add <dir> --profile`、`remove <dir>`），
+直接写 `config.json`，校验同上。
+
+**没有 config 的首跑**：guster 探测约定目录 `~/Projects`、`~/code`、`~/dev`、
+`~/src`。命中即照常扫描并打「未配置」横幅提示跑 `guster init` 固定；一个都
+没有则 fail-loud（退出码 1）并指路 `guster init --root <path>`。绝不静默扫
+整个 home 目录。
 
 ## Lite Hub
 
@@ -102,10 +137,11 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 - **ICR** 索引覆盖率
 - **FRS** 状态新鲜度：Hub 项目卡目录（`projects/`）、`handoff/`、`provision/`
   与 `.agents/plans/` 四类状态文档中在 90 天 SLA 内核实过的比例；分母只认这四个
-  前缀，Hub `reports/` 或机器级笔记不算状态文档。日期依次取自 `verified_at`、
-  前 40 行内的 `最后更新`、文件名开头处的日期（`2026-11-05-…`、`20261105-…`），
-  或该文档所属仓库的最后一次 git 提交。正文深处的日期和文件名里的工单号都不算
-  新鲜度声明。
+  前缀，Hub `reports/` 或机器级笔记不算状态文档。日期取自前 40 行内的声明键——
+  `verified_at`（canonical）、中文 `最后更新` 族或英文 `Last updated:`/`updated:`
+  ——或文件名开头处的日期（`2026-11-05-…`、`20261105-…`）；都没有时依次兜底到
+  所属仓库最后一次 git 提交、再兜底文件 mtime（Raw 列会标注来源）。正文深处的
+  日期和文件名里的工单号都不算新鲜度声明。
 - **PHR** 指针健康率
 - **SIR** 敏感隔离率：凭据文件 + host 配置里的字面令牌。Guster 不扫描任意文件内容找
   token 形状 —— 那是发布闸的职责；SIR 只声称它确实看过的东西。
@@ -116,7 +152,7 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 
 ## 上下文格式规范
 
-指标全是静态的——文件名主干、内容哈希、路径解析、git 日期——所以只有守住格式契约的文档才被测得到。契约本身已写成文档并版本化：[`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)（spec_version 1，规则 `CTX-01..08`（0.7.2 增 `CTX-09` 结构化条目头），markdownlint 式稳定编号）。它遵循开源惯例而不是另造一套：指令文件用 `AGENTS.md`（[agents.md](https://agents.md) 标准）、索引文件用 llms.txt 形态的链接列表（[llmstxt.org](https://llmstxt.org)）、规则编号学 markdownlint。
+指标全是静态的——文件名主干、内容哈希、路径解析、git 日期——所以只有守住格式契约的文档才被测得到。契约本身已写成文档并版本化：[`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)（spec_version 1，规则 `CTX-01..10`——`CTX-09` 结构化条目头、`CTX-10` 机器可读项目登记表，markdownlint 式稳定编号）。它遵循开源惯例而不是另造一套：指令文件用 `AGENTS.md`（[agents.md](https://agents.md) 标准）、索引文件用 llms.txt 形态的链接列表（[llmstxt.org](https://llmstxt.org)）、规则编号学 markdownlint。
 
 不守契约的文档不是被扣分——而是彻底隐身：正文里裸写的路径永远到不了指针检查、「上周更新」落到 git 时间兜底、索引里没有文件名等于没索引。0.7.0 起 `naked-pointer` finding 从另一侧堵上这个缺口：指令文档/索引页里留在链接和代码记号之外的文件路径会被直接报告，写不规范的形态同时也是会被标记的形态。
 
@@ -141,7 +177,13 @@ Guster 读取 `~/.agents/credentials/registry.md`，并对照它检查发现的�
 - `secret-missing` — 已登记的位置已不存在。
 - `git-unavailable` — 某个仓库查询失败，跟踪状态与提交日期未知；SIR 会把这类凭据记为「未核实」而不是「干净」。
 
-登记表保存范围（`company` / `personal`）、站点、账号、类型、位置和变量名，从不保存凭据值。`guster credentials` 按范围输出。
+登记表保存范围（`company` / `personal`）、站点、账号、类型、位置和变量名，从不保存凭据值。`guster credentials` 按范围输出。一行可复制的样例（列序固定——详见格式规范；前 6 列必填，`keys`/`used_by`/`status` 可选）：
+
+```markdown
+| ID | scope | site | account | kind | locations | keys | used_by | status |
+|---|---|---|---|---|---|---|---|---|
+| example-host | personal | example.com | me@example.com | token | `~/.agents/credentials/example-host.env` | `EXAMPLE_HOST_TOKEN` | my-cli | active |
+```
 
 ## 八个平面
 
@@ -156,12 +198,24 @@ Guster 读取 `~/.agents/credentials/registry.md`，并对照它检查发现的�
 
 ## 安全边界
 
-- 默认不写工作区：只有 `apply --yes`、`init --yes`、`hub init --yes` 和 `hub attach` 会自行改动工作区文件或 Guster 配置；`export --out <path>` 只写你指定的报告路径。
-- Guster 会在状态目录（`~/.agents/guster/` 或 `scoped/<hash>/`）维护三个状态文件：所有扫描类命令都会重写 `registry.json`（`status` 在没有 registry 时也会写），`doctor` 另写 `findings.json`，`score` 追加 `metrics.jsonl`。`--no-write` 只对 `scan`、`doctor`、`score` 关闭本命令的状态文件。
+- 默认不写工作区：只有 `apply --yes`、`init --yes`、`hub init --yes` 和 `hub attach` 会自行改动工作区文件或 Guster 配置；`export` 总会写报告文件——默认 `<state-dir>/context-health.md`，或 `--out` 指定的路径（`--format json` 时另加 `.json` 姊妹文件）。
+- Guster 会在状态目录（`~/.agents/guster/` 或 `scoped/<hash>/`）维护五个文件：`config.json`（roots/zones/hub，由 `init`、`hub init`/`attach` 和 `zones` 写入）、所有扫描类命令都会重写的 `registry.json`（`status` 在没有 registry 时也会写）、`doctor` 的 `findings.json`、`score` 的 `metrics.jsonl`，以及串行化并发运行的临时 `.lock`。`--no-write` 只对 `scan`、`doctor`、`score`、`check` 关闭本命令的状态写入。（`plans/` 与 `backups/` 是目录，不算文件。）
 - 永不持久化或输出凭据值；扫描只保留路径和脱敏形态。
 - 不自动 `git add` / `commit` / `push` / 部署。
-- 公司/公共仓 tracked 文件不是普通迁移目标。
-- plan 写 `~/.agents/guster/plans/`，备份写 `~/.agents/guster/backups/`。
+- 不拥有、也无权变更其 tracked 文件的仓库——共享仓或雇主仓通常是——不是普通迁移目标。
+- plan 写 `~/.agents/guster/plans/`。`apply` 改动前把每个被触碰路径复制到 `~/.agents/guster/backups/<plan-id>/`，操作失败自动回滚；若回滚本身也失败，报错会点名该备份目录，手工把改动前副本拷回即完成恢复。plan 备份目录只保留最近 10 个。
+
+## 退出码
+
+| 码 | 含义 |
+|---|---|
+| `0` | 成功——干净运行，或 finding 严重度不高于 `medium` |
+| `1` | 工具/配置错误：plan 损坏或不可读、执行中失败且已回滚的 apply、工作区根不存在、`config.json` 无效（`roots` 非列表、root/zone/hub 路径坏、`roots` 为空、无可扫候选——跑 `guster init`）；已接入 hub 校验不过时 `hub status` 也返回 1 |
+| `2` | `doctor`/`check` 发现 `high`（但无 `critical`）finding；`score --fail-under` 低于目标或 CHI 不可算；`hub validate` 未过 Lite 契约；`link` 发现断链；`upgrade` 发现各 manifest 版本不一致 |
+| `3` | `doctor`/`check` 发现 `critical` finding |
+| `4` | `apply`、`init` 或 `hub init` 在 preflight 拒绝了 plan——什么都没动（move 源不存在、目标已存在、目标类型不对） |
+
+同一张表也随 `guster` skill 发布，agent 与人读同一份契约。门禁看退出码，CHI 看趋势。
 
 ## 插件宿主
 

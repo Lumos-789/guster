@@ -834,6 +834,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="guster",
         description="Discover, audit, plan and evolve agent context.",
+        epilog=(
+            "Scans refresh Guster's state files; workspace writes need a plan with --yes. "
+            "Exit codes: 1 tool/config error, 2 high findings, 3 critical findings, 4 plan refused at preflight."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)

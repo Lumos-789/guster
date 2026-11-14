@@ -62,7 +62,8 @@ guster doctor --scope hub
 - Add the file name to `knowledge/README.md`.
 - Register a project in `projects/_registry.md`, then create `projects/{slug}.md`.
 - Add a tool only when it is a run-once command: one directory with its own `AGENTS.md`, then a row in `tools/README.md`.
-- Put `最后更新: YYYY-MM-DD` in every state document.
+- Put `verified_at: YYYY-MM-DD` in every state document (`最后更新:` is the
+  accepted Chinese form; `verified_at` is canonical — see the format spec).
 - Optional structured header (CTX-09): front-matter that declares `type:` plus a date key (Obsidian properties convention) opts the note into machine checks. Keep truth sources as body markdown links, never as invented header keys.
 
 ## Existing hub
@@ -80,4 +81,5 @@ guster hub attach --path <hub>
 - Never copy private content from another hub into a new one.
 - Never add credentials, company secrets, generated caches or scratch files.
 - Do not add optional modules just to fill the tree.
-- Do not write Hub content from the governance skill; use `knowledge-capture` for durable notes.
+- Do not write Hub content from the governance skill; propose durable notes to
+  the user and let them (or their capture workflow of choice) file them.
