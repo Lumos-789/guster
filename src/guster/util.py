@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import re
 import subprocess
+import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX hosts
+    fcntl = None  # type: ignore[assignment]
 
 
 EXCLUDE_DIRS = {
@@ -113,8 +121,34 @@ def read_text(path: Path, limit: Optional[int] = None) -> str:
 
 
 def write_text(path: Path, text: str) -> None:
+    """Atomic replace: a concurrent reader sees the old or the new file, never a mix."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+
+
+@contextmanager
+def state_lock(state_dir: Path) -> Iterator[None]:
+    """Exclusive lock over one state dir so concurrent CLI runs cannot interleave
+    scan/policy writes. flock is POSIX-only; elsewhere the lock degrades to a no-op
+    while write_text itself stays atomic."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    handle = (state_dir / ".lock").open("w")
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        handle.close()
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -171,6 +205,30 @@ def load_json(path: Path, default: Any = None) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
+
+
+def load_json_strict(path: Path) -> Tuple[Any, Optional[str]]:
+    """Value and error apart: absent is (None, None), corrupt is (None, reason).
+
+    Missing and corrupt are different conditions; a caller that can rescan must
+    warn about corruption instead of silently treating it as absent."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, str(exc)
+    try:
+        return json.loads(raw), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def is_indexed(name: str, index_text: str) -> bool:
+    """A backtick-wrapped index row, bare or as a `dir/name` tail.
+
+    A bare substring does not count: `a.md` inside `data.md` is not an index row."""
+    return f"`{name}`" in index_text or f"/{name}`" in index_text
 
 
 def save_json(path: Path, data: Any) -> None:
@@ -247,12 +305,18 @@ def iter_files(
     suffixes: Optional[Set[str]] = None,
     max_depth: Optional[int] = None,
     skip_dirs: Optional[Set[str]] = None,
+    errors: Optional[List[str]] = None,
 ) -> Iterator[Path]:
     if not root.exists():
         return
     skip = EXCLUDE_DIRS if skip_dirs is None else skip_dirs
     root = root.resolve()
-    for current, dirs, files in os.walk(root):
+
+    def on_error(exc: OSError) -> None:
+        if errors is not None:
+            errors.append(f"{exc.filename or root}: {exc.strerror or exc}")
+
+    for current, dirs, files in os.walk(root, onerror=on_error):
         current_path = Path(current)
         depth = len(current_path.relative_to(root).parts)
         if max_depth is not None and depth >= max_depth:
@@ -337,6 +401,12 @@ def git_last_commit_dates(root: Path) -> Optional[Dict[str, str]]:
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode != 0:
+        if result.returncode == 128 and "does not have any commits yet" in (
+            result.stderr or ""
+        ):
+            # A freshly `git init`-ed repo has no history to read: no dates,
+            # not a git failure.
+            return {}
         return None
     dates: Dict[str, str] = {}
     current = ""
@@ -583,6 +653,7 @@ def resolve_pointer(
     base_file: Path,
     hub: Optional[Path] = None,
     home: Optional[Path] = None,
+    config_roots: Optional[Sequence[Path]] = None,
 ) -> Optional[Path]:
     if not pointer or _is_placeholder(pointer):
         return None
@@ -601,19 +672,22 @@ def resolve_pointer(
     if cleaned.startswith(("./", "../")):
         return (base_file.parent / expanded).resolve()
     anchor = cleaned.split("/", 1)[0]
-    roots: List[Path] = [base_file.parent]
+    anchors: List[Path] = [base_file.parent]
     repo_root = find_repo_root(base_file.parent)
     if repo_root is not None and repo_root != base_file.parent:
-        roots.append(repo_root)
+        anchors.append(repo_root)
     if hub is not None:
-        roots.append(hub)
+        anchors.append(hub)
     if home is not None:
-        roots.extend([home, home / "IdeaProjects", home / "ZCodeProject"])
-    if not any((root / anchor).exists() for root in roots):
+        anchors.append(home)
+    if config_roots:
+        # Anchors follow the user's declared roots, never hardcoded layouts.
+        anchors.extend(config_roots)
+    if not any((root / anchor).exists() for root in anchors):
         # A bare relative path only counts as a pointer when its first segment
         # exists in one of the known roots. Otherwise it is prose about another repo.
         return None
-    candidates: List[Path] = [(root / expanded).resolve() for root in roots]
+    candidates: List[Path] = [(root / expanded).resolve() for root in anchors]
     for candidate in candidates:
         if candidate.exists():
             return candidate

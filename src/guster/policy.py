@@ -34,6 +34,12 @@ RESIDENT_ENTRIES = (
     (".claude", "CLAUDE.md"),
 )
 DATE_HEADER_LINES = 40
+VERIFIED_DATE_KEYS = r"(?:最后更新|更新时间|更新于|最近核实|最后核实|已核实|verified_at|(?i:last updated|updated))"
+FRESH_SOURCE_STATS = {
+    "declared": "state_docs_fresh_declared",
+    "git": "state_docs_fresh_from_git",
+    "mtime": "state_docs_fresh_from_mtime",
+}
 
 
 def resident_entries(home: Path) -> List[Path]:
@@ -125,6 +131,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         "state_docs_fresh": 0,
         "state_docs_fresh_declared": 0,
         "state_docs_fresh_from_git": 0,
+        "state_docs_fresh_from_mtime": 0,
         "duplicate_knowledge": 0,
         "note_headers_total": 0,
         "governance_docs": len(registry.get("governance_docs", [])),
@@ -139,6 +146,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         "pointer_files_scanned": 0,
         "git_probe_failures": 0,
         "inline_bearers": 0,
+        "scan_walk_errors": int((registry.get("scan_errors") or {}).get("count") or 0),
     }
     home = config.home
     hub = config.hub
@@ -386,8 +394,9 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
 
     # State freshness. Plans are state-plane documents too, even though their
     # kind is "plan"; select on the plane so project/group scopes are not
-    # vacuously fresh. Freshness is declared (verified_at / 最后更新 / filename
-    # date) and otherwise falls back to the owning repository's git date.
+    # vacuously fresh. The date ladder is declared (verified_at / updated /
+    # 最后更新 / filename date) → owning repository's git date → file mtime,
+    # each tier reported as its own freshness source.
     state_prefixes = ["handoff/", "provision/", ".agents/plans/"]
     if hub_layout:
         state_prefixes.append(relative(hub_layout["projects"], hub).rstrip("/") + "/")
@@ -431,6 +440,15 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     project_commit_dates[key] = dates
                 verified = project_commit_dates[key].get(item.get("rel", ""), "")
             source = "git"
+        if not verified and item.get("mtime"):
+            # Files git never saw (e.g. gitignored `.agents/` docs) still carry
+            # an mtime; count it as its own source instead of a freshness cliff.
+            verified = (
+                datetime.fromtimestamp(float(item["mtime"]), tz=timezone.utc)
+                .date()
+                .isoformat()
+            )
+            source = "mtime"
         if not verified:
             stale_missing.append(str(path))
             continue
@@ -442,7 +460,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
             parsed = parsed.replace(tzinfo=timezone.utc)
         if (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).days <= 90:
             stats["state_docs_fresh"] += 1
-            stats["state_docs_fresh_declared" if source == "declared" else "state_docs_fresh_from_git"] += 1
+            stats[FRESH_SOURCE_STATS[source]] += 1
         else:
             stale_old.append((str(path), verified))
     if stale_missing:
@@ -528,7 +546,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         pointers = extract_pointers(text)
         broken: List[str] = []
         for pointer in pointers:
-            resolved = resolve_pointer(pointer, path, hub, home)
+            resolved = resolve_pointer(pointer, path, hub, home, config_roots=config.roots)
             if resolved is None:
                 continue
             stats["pointers_checked"] += 1
@@ -821,7 +839,7 @@ def extract_verified_date(text: str) -> str:
     """Declared date from the document header; prose deeper down is not a claim about this file."""
     head = "\n".join(text.splitlines()[:DATE_HEADER_LINES])
     match = re.search(
-        r"(?:最后更新|更新时间|更新于|最近核实|最后核实|已核实|verified_at)\s*\*{0,2}\s*[:：]\s*\*{0,2}\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})",
+        VERIFIED_DATE_KEYS + r"\s*\*{0,2}\s*[:：]\s*\*{0,2}\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})",
         head,
     )
     return match.group(1) if match else ""

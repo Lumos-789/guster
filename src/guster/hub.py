@@ -8,7 +8,7 @@ from . import __version__
 from .executor import apply_plan
 from .layout import DEFAULT_PATHS, load_manifest, resolve_hub_layout, validate_layout_value
 from .planner import build_plan, op_mkdir, op_write, save_plan
-from .util import load_json, now_iso, read_text, save_json, today_iso
+from .util import is_indexed, load_json, now_iso, read_text, save_json, today_iso
 
 
 def default_hub_path(home: Path) -> Path:
@@ -185,14 +185,14 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
                 for note in sorted(root.rglob("*.md")):
                     if note.name.lower() == "readme.md":
                         continue
-                    if note.name not in index:
+                    if not is_indexed(note.name, index):
                         errors.append(f"knowledge note is not indexed: {_relative(note, hub)}")
 
         registry_path = layout["projects"] / "_registry.md"
         if registry_path.is_file():
             registry = read_text(registry_path)
             if not re.search(
-                r"(?:最后更新|更新时间|更新于|最近核实|最后核实|已核实|verified_at)"
+                r"(?:最后更新|更新时间|更新于|最近核实|最后核实|已核实|verified_at|(?i:last updated|updated))"
                 r"\s*\*{0,2}\s*[:：]\s*\*{0,2}\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}",
                 registry,
             ):

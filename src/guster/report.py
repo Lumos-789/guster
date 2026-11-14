@@ -127,7 +127,9 @@ def render_report(
             metrics.get("frs"),
             scores.get("frs"),
             f"{raw.get('state_docs_fresh', 0)}/{raw.get('state_docs_total', 0)} fresh "
-            f"({raw.get('state_docs_fresh_declared', 0)} declared, {raw.get('state_docs_fresh_from_git', 0)} from git)",
+            f"({raw.get('state_docs_fresh_declared', 0)} declared, "
+            f"{raw.get('state_docs_fresh_from_git', 0)} from git, "
+            f"{raw.get('state_docs_fresh_from_mtime', 0)} from mtime)",
         ),
         ("Pointer health", "phr", metrics.get("phr"), scores.get("phr"), f"{raw.get('pointers_valid', 0)}/{raw.get('pointers_checked', 0)} valid"),
         (

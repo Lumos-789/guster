@@ -169,6 +169,7 @@ def compute_metrics(registry: Dict[str, Any], policy_result: Dict[str, Any]) -> 
             "state_docs_fresh": int(stats.get("state_docs_fresh", 0)),
             "state_docs_fresh_declared": int(stats.get("state_docs_fresh_declared", 0)),
             "state_docs_fresh_from_git": int(stats.get("state_docs_fresh_from_git", 0)),
+            "state_docs_fresh_from_mtime": int(stats.get("state_docs_fresh_from_mtime", 0)),
             "pointers_checked": int(stats.get("pointers_checked", 0)),
             "pointers_valid": int(stats.get("pointers_valid", 0)),
             "broken_pointers": int(stats.get("broken_pointers", 0)),
@@ -182,6 +183,7 @@ def compute_metrics(registry: Dict[str, Any], policy_result: Dict[str, Any]) -> 
             "secret_in_git": int(stats.get("secret_in_git", 0)),
             "inline_bearers": inline_bearers,
             "git_probe_failures": int(stats.get("git_probe_failures", 0)),
+            "scan_walk_errors": int(stats.get("scan_walk_errors", 0)),
             "governance_docs": governance_count,
         },
     }

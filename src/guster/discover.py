@@ -13,6 +13,7 @@ from .util import (
     find_git_roots,
     first_heading,
     git_tracked,
+    is_indexed,
     is_under,
     iter_files,
     load_json,
@@ -247,22 +248,24 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
 
     projects: List[Dict[str, Any]] = []
     project_tracked: Dict[str, Optional[Set[str]]] = {}
+    used_ids: Set[str] = set()
     for root in sorted(project_roots, key=lambda item: str(item)):
         tracked = git_tracked(root)
         project_tracked[str(root)] = tracked
-        projects.append(
-            scan_project(
-                root=root,
-                group=root.parent.name,
-                tracked=tracked,
-                now=config.now,
-            )
+        project = scan_project(
+            root=root,
+            group=root.parent.name,
+            tracked=tracked,
+            now=config.now,
+            taken=used_ids,
         )
+        used_ids.add(project["id"])
+        projects.append(project)
 
     mark_containers(projects)
-    project_by_id = {project["id"]: project for project in projects}
     index_texts = load_index_texts(home, hub, projects)
 
+    walk_errors: List[str] = []
     artifacts: List[Dict[str, Any]] = []
     zones = [
         item
@@ -270,11 +273,11 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
         if Path(item["path"]).expanduser().is_dir()
     ]
     if scope != "hub":
-        artifacts.extend(scan_project_agents(projects, index_texts, project_tracked))
-        artifacts.extend(scan_zones(zones))
-    artifacts.extend(scan_hub_knowledge(hub, index_texts))
+        artifacts.extend(scan_project_agents(projects, index_texts, project_tracked, walk_errors))
+        artifacts.extend(scan_zones(zones, walk_errors))
+    artifacts.extend(scan_hub_knowledge(hub, index_texts, walk_errors))
     if scope != "hub":
-        artifacts.extend(scan_local_wiki(home, index_texts))
+        artifacts.extend(scan_local_wiki(home, index_texts, walk_errors))
     artifacts = dedupe_artifacts(artifacts)
     scoped = scope_roots(config)
     if scoped is not None:
@@ -291,6 +294,7 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
         project_tracked,
         zones=zones,
         include_home=scope != "hub",
+        errors=walk_errors,
     )
     credential_registry = scan_credential_registry(home)
     inline_bearers = scan_inline_bearers(home) if scope != "hub" else []
@@ -312,6 +316,7 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
         "unconfigured": config.unconfigured,
         "auto_roots": config.auto_roots,
         "workspaces": [str(root) for root in roots],
+        "scan_errors": {"count": len(walk_errors), "examples": walk_errors[:10]},
         "zones": [
             {
                 "path": str(Path(item["path"]).expanduser()),
@@ -340,7 +345,7 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
             artifacts,
             secret_files,
             inline_bearers,
-            count_project_cards(hub),
+            count_project_cards(hub, walk_errors),
         ),
     }
     return registry
@@ -380,6 +385,7 @@ def scan_project(
     group: str,
     tracked: Optional[Set[str]],
     now: str,
+    taken: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     agent_files = find_agent_files(root, max_depth=3)
     agents_dir = root / ".agents"
@@ -404,7 +410,7 @@ def scan_project(
             status = match.group(1).strip()
             break
 
-    project_id = unique_project_id(root.name, root)
+    project_id = unique_project_id(root.name, root, taken)
     return {
         "id": project_id,
         "path": str(root),
@@ -437,9 +443,14 @@ def agents_index_present(agents_dir: Path) -> bool:
     return False
 
 
-def unique_project_id(name: str, root: Path) -> str:
+def unique_project_id(name: str, root: Path, taken: Optional[Set[str]] = None) -> str:
+    """Slug id; a same-name sibling gets a short path-hash suffix so
+    `project:{id}` index keys never overwrite each other."""
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip()).strip("-")
-    return cleaned or sha256_text(str(root))[:10]
+    base = cleaned or sha256_text(str(root))[:10]
+    if taken is not None and base in taken:
+        return f"{base}-{sha256_text(str(root))[:8]}"
+    return base
 
 
 def find_agent_files(root: Path, max_depth: int = 3) -> List[Path]:
@@ -518,8 +529,13 @@ def artifact_record(
         text = read_text(path, limit=1_000_000)
     frontmatter, body = parse_frontmatter(text)
     size = 0
+    mtime = 0.0
     try:
-        size = path.stat().st_size
+        # One stat, no exists-then-stat window: a file deleted mid-scan reads
+        # as absent (0), never as a crash.
+        info = path.stat()
+        size = info.st_size
+        mtime = info.st_mtime
     except OSError:
         pass
     tracked_flag: Optional[bool] = False
@@ -539,13 +555,13 @@ def artifact_record(
         "scope": scope,
         "project": project_id,
         "size": size,
-        "mtime": path.stat().st_mtime if path.exists() else 0,
+        "mtime": mtime,
         "hash": sha256_file(path) if size <= HASH_LIMIT else "",
         "frontmatter": frontmatter,
         "title": first_heading(body if text else "", path.stem),
         "indexed": indexed,
         "git_tracked": tracked_flag,
-        "verified_at": frontmatter.get("verified_at", ""),
+        "verified_at": frontmatter.get("verified_at") or frontmatter.get("updated", ""),
         "stale_after": frontmatter.get("stale_after", ""),
         "status": frontmatter.get("status", ""),
     }
@@ -555,6 +571,7 @@ def scan_project_agents(
     projects: Sequence[Dict[str, Any]],
     index_texts: Dict[str, str],
     project_tracked: Dict[str, Optional[Set[str]]],
+    errors: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for project in projects:
@@ -590,13 +607,13 @@ def scan_project_agents(
                 # A shared slot (e.g. a wiki linked from a sibling checkout) is
                 # scanned under the project that owns the real directory.
                 continue
-            for path in iter_files(slot_root, suffixes={".md", ".json", ".yaml", ".yml"}):
+            for path in iter_files(slot_root, suffixes={".md", ".json", ".yaml", ".yml"}, errors=errors):
                 if "openspec" in path.parts[:-1]:
                     # OpenSpec store config and change metadata are state, not knowledge.
                     continue
                 if path.is_symlink():
                     continue
-                indexed = path.name in index_text if kind == "knowledge" else None
+                indexed = is_indexed(path.name, index_text) if kind == "knowledge" else None
                 records.append(
                     artifact_record(path, kind, plane, "project", project["id"], indexed, tracked, root)
                 )
@@ -606,6 +623,7 @@ def scan_project_agents(
 def scan_hub_knowledge(
     hub: Optional[Path],
     index_texts: Dict[str, str],
+    errors: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     if not hub:
         return []
@@ -639,10 +657,10 @@ def scan_hub_knowledge(
     for root, kind, plane, scope, check_index, suffixes in groups:
         if not root.is_dir():
             continue
-        for path in iter_files(root, suffixes=suffixes):
+        for path in iter_files(root, suffixes=suffixes, errors=errors):
             indexed = None
             if check_index and kind == "knowledge":
-                indexed = path.name in knowledge_index
+                indexed = is_indexed(path.name, knowledge_index)
             records.append(
                 artifact_record(path, kind, plane, scope, None, indexed, tracked, hub)
             )
@@ -654,7 +672,7 @@ def scan_hub_knowledge(
             )
         )
     tools_root = layout.get("tools")
-    for path in iter_files(tools_root, suffixes={".md"}, max_depth=3) if tools_root else []:
+    for path in iter_files(tools_root, suffixes={".md"}, max_depth=3, errors=errors) if tools_root else []:
         if path.name in {"AGENTS.md", "README.md"}:
             records.append(
                 artifact_record(path, "tool", "capability", "project", None, None, tracked, hub)
@@ -665,13 +683,14 @@ def scan_hub_knowledge(
 def scan_local_wiki(
     home: Path,
     index_texts: Dict[str, str],
+    errors: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     root = home / ".agents" / "wiki"
     if not root.is_dir():
         return []
     index_text = index_texts.get("local_wiki", "")
     records: List[Dict[str, Any]] = []
-    for path in iter_files(root, suffixes={".md"}, skip_dirs=EXCLUDE_DIRS | {"assets"}):
+    for path in iter_files(root, suffixes={".md"}, skip_dirs=EXCLUDE_DIRS | {"assets"}, errors=errors):
         if path.is_symlink():
             # Compatibility links point at a canonical file already counted.
             continue
@@ -682,7 +701,7 @@ def scan_local_wiki(
                 "knowledge",
                 "local",
                 None,
-                path.name in index_text,
+                is_indexed(path.name, index_text),
             )
         )
     return records
@@ -708,7 +727,10 @@ def count_zone_tools(root: Path) -> int:
     return count
 
 
-def scan_zones(zones: Sequence[Dict[str, str]]) -> List[Dict[str, Any]]:
+def scan_zones(
+    zones: Sequence[Dict[str, str]],
+    errors: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """Light-profile zone scan: entry docs and nothing else.
 
     A declared tool zone is not a project tree. The light profile collects
@@ -719,7 +741,7 @@ def scan_zones(zones: Sequence[Dict[str, str]]) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for zone in zones:
         root = Path(zone["path"]).expanduser()
-        for path in iter_files(root, suffixes={".md"}, max_depth=3):
+        for path in iter_files(root, suffixes={".md"}, max_depth=3, errors=errors):
             if path.is_symlink() or path.name not in {"AGENTS.md", "README.md"}:
                 continue
             records.append(
@@ -834,6 +856,7 @@ def scan_secret_files(
     project_tracked: Dict[str, Optional[Set[str]]],
     zones: Sequence[Dict[str, str]] = (),
     include_home: bool = True,
+    errors: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     candidates: List[Path] = []
     if include_home:
@@ -841,13 +864,13 @@ def scan_secret_files(
             if root.is_dir():
                 candidates.extend(
                     path
-                    for path in iter_files(root)
+                    for path in iter_files(root, errors=errors)
                     if path.is_file() and path.suffix.lower() != ".md"
                 )
     if hub:
         tools_root = resolve_hub_layout(hub).get("tools")
         if tools_root and tools_root.is_dir():
-            for path in iter_files(tools_root, max_depth=3):
+            for path in iter_files(tools_root, max_depth=3, errors=errors):
                 if path.name in SECRET_SUFFIX_NAMES or path.name.startswith("credentials.") or path.name.endswith(".local.json"):
                     candidates.append(path)
     for zone in zones:
@@ -884,12 +907,16 @@ def scan_secret_files(
         if tracked is None and not any(is_under(path, Path(p["path"])) for p in projects):
             # Outside every scanned repository there is nothing that could track it.
             tracked = False
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
         records.append(
             {
                 "path": str(path),
                 "canonical": canonical,
                 "git_tracked": tracked,
-                "size": path.stat().st_size if path.exists() else 0,
+                "size": size,
                 "kind": infer_secret_kind(path),
             }
         )
@@ -1007,7 +1034,7 @@ def scan_plugin_manifests(plugin_root: Optional[Path]) -> Dict[str, Any]:
 PROJECT_CARD_NAMES = {"_registry.md", "readme.md", "agents.md"}
 
 
-def count_project_cards(hub: Optional[Path]) -> int:
+def count_project_cards(hub: Optional[Path], errors: Optional[List[str]] = None) -> int:
     """Project cards known to the hub, not the project roots a run scanned."""
     if not hub:
         return 0
@@ -1016,7 +1043,7 @@ def count_project_cards(hub: Optional[Path]) -> int:
         return 0
     return sum(
         1
-        for path in iter_files(root, suffixes={".md"}, max_depth=1)
+        for path in iter_files(root, suffixes={".md"}, max_depth=1, errors=errors)
         if path.parent == root and path.name.lower() not in PROJECT_CARD_NAMES
     )
 

@@ -21,7 +21,14 @@ from .planner import (
 )
 from .policy import run_policy
 from .report import redacted_registry, render_report, render_status
-from .util import json_dumps, load_json, now_iso, save_json, write_text
+from .util import (
+    json_dumps,
+    load_json_strict,
+    now_iso,
+    save_json,
+    state_lock,
+    write_text,
+)
 
 
 def default_state_dir(home: Path) -> Path:
@@ -189,18 +196,27 @@ def ensure_state(config: ScanConfig) -> None:
 
 def do_scan(config: ScanConfig, write: bool = True) -> Dict[str, Any]:
     ensure_state(config)
-    registry = scan(config)
-    if write:
-        save_json(config.state_dir / "registry.json", registry)
+    with state_lock(config.state_dir):
+        registry = scan(config)
+        if write:
+            save_json(config.state_dir / "registry.json", registry)
     return registry
 
 
 def load_registry(config: ScanConfig) -> Optional[Dict[str, Any]]:
+    """Cached registry; corrupt content warns and reads as absent so `status`
+    rescans instead of silently self-healing."""
     path = config.state_dir / "registry.json"
-    if not path.is_file():
+    data, error = load_json_strict(path)
+    if error is not None:
+        print(f"[guster] warning: {path} is corrupt ({error}); rescanning", file=sys.stderr)
         return None
-    data = load_json(path, None)
-    return data if isinstance(data, dict) else None
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        print(f"[guster] warning: {path} is not a JSON object; rescanning", file=sys.stderr)
+        return None
+    return data
 
 
 def evaluate(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
@@ -211,18 +227,19 @@ def evaluate(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
 
 def append_metric(config: ScanConfig, metric_result: Dict[str, Any]) -> None:
     ensure_state(config)
-    path = config.state_dir / "metrics.jsonl"
-    line = {
-        "at": metric_result.get("generated_at", now_iso()),
-        "scope": metric_result.get("scope"),
-        "chi": metric_result.get("chi"),
-        "dims": metric_result.get("dims"),
-        "unscored_dims": metric_result.get("unscored_dims"),
-        "metrics": metric_result.get("metrics", {}),
-        "scores": metric_result.get("scores", {}),
-    }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(line, ensure_ascii=False) + "\n")
+    with state_lock(config.state_dir):
+        path = config.state_dir / "metrics.jsonl"
+        line = {
+            "at": metric_result.get("generated_at", now_iso()),
+            "scope": metric_result.get("scope"),
+            "chi": metric_result.get("chi"),
+            "dims": metric_result.get("dims"),
+            "unscored_dims": metric_result.get("unscored_dims"),
+            "metrics": metric_result.get("metrics", {}),
+            "scores": metric_result.get("scores", {}),
+        }
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
 def last_metric(config: ScanConfig) -> Optional[Dict[str, Any]]:
@@ -245,7 +262,8 @@ def last_metric(config: ScanConfig) -> Optional[Dict[str, Any]]:
 
 def write_findings(config: ScanConfig, policy_result: Dict[str, Any]) -> None:
     ensure_state(config)
-    save_json(config.state_dir / "findings.json", policy_result)
+    with state_lock(config.state_dir):
+        save_json(config.state_dir / "findings.json", policy_result)
 
 
 def print_scan_summary(registry: Dict[str, Any], config: ScanConfig) -> None:
@@ -322,7 +340,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     config = build_config(args)
-    registry = do_scan(config, write=True)
+    registry = do_scan(config, write=not args.no_write)
     result = evaluate(registry, config)
     policy_result = result["policy"]
     if not args.no_write:
@@ -342,7 +360,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_score(args: argparse.Namespace) -> int:
     config = build_config(args)
-    registry = do_scan(config, write=True)
+    registry = do_scan(config, write=not args.no_write)
     result = evaluate(registry, config)
     metric_result = result["metrics"]
     if not args.no_write:
@@ -829,12 +847,12 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.set_defaults(func=cmd_scan)
 
     doctor = subparsers.add_parser("doctor", parents=[common], help="Run policy checks.")
-    doctor.add_argument("--no-write", action="store_true", help="Do not write findings.json.")
+    doctor.add_argument("--no-write", action="store_true", help="Do not write registry.json or findings.json.")
     doctor.set_defaults(func=cmd_doctor)
 
     score = subparsers.add_parser("score", parents=[common], help="Compute metrics and CHI.")
     score.add_argument("--write", action="store_true", help="Write metrics (default; kept for explicit scripts).")
-    score.add_argument("--no-write", action="store_true", help="Do not append metrics.jsonl.")
+    score.add_argument("--no-write", action="store_true", help="Do not write registry.json or append metrics.jsonl.")
     score.add_argument("--trend", action="store_true", help="Show the last 10 metric snapshots.")
     score.add_argument(
         "--fail-under",

@@ -113,6 +113,9 @@ class GusterCoreTests(unittest.TestCase):
         self.assertEqual(len(paths), len(set(paths)), "artifacts must be unique per path")
 
     def test_policy_finds_drift_budget_and_secrets(self) -> None:
+        # mtime fallback (0.9.0) rescues dateless state docs, so the basket test
+        # carries an explicitly stale one to keep the rule covered.
+        write(self.fx.hub / "handoff" / "2020-01-01-old.md", "# Old handoff\n")
         registry = self.fx.registry()
         result = run_policy(registry, self.fx.config())
         rules = {item["rule"] for item in result["findings"]}
@@ -1777,6 +1780,342 @@ class FirstRunCoreCommandTests(unittest.TestCase):
         self.assertIn("**Unconfigured:** auto-scanning", out)
         self.assertIn("`guster init`", out)
         self.assertIn("**No hub attached**", out)
+
+
+class DataAndConcurrencyTests(unittest.TestCase):
+    """0.9.0 phase 2: atomic writes, state lock, ids, TOCTOU, freshness ladder."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="guster-p2-"))
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        self.state = self.tmp / "state"
+
+    def tearDown(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def run_cli(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = cli.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def make_project(self, *parts, git=False, plan_text="# Plan\n") -> Path:
+        project = self.tmp.joinpath(*parts)
+        write(project / "AGENTS.md", "# App\n")
+        write(project / ".agents" / "README.md", "# Index\n")
+        write(project / ".agents" / "plans" / "plan.md", plan_text)
+        if git:
+            (project / ".git").mkdir(parents=True)
+        return project
+
+    def scan_config(self, roots, scope="project", state=None):
+        return ScanConfig(
+            home=self.home,
+            hub=None,
+            roots=roots,
+            state_dir=state or (self.tmp / "scan-state"),
+            plugin_root=ROOT,
+            max_depth=3,
+            scope=scope,
+            now="2026-11-14T00:00:00+08:00",
+        )
+
+    def test_concurrent_writers_and_reader_never_tear_the_registry(self):
+        import subprocess
+        import sys
+
+        from guster.util import save_json
+
+        state = self.tmp / "con-state"
+        state.mkdir(parents=True)
+        target = state / "registry.json"
+        blob = "x" * 40_000
+        save_json(target, {"writer": "init", "seq": 0, "blob": ""})
+        writer_src = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            f"sys.path.insert(0, {str(ROOT / 'src')!r})\n"
+            "from guster.util import save_json\n"
+            f"target = Path({str(target)!r})\n"
+            f"blob = {blob!r}\n"
+            "for seq in range(200):\n"
+            "    save_json(target, {'writer': sys.argv[1], 'seq': seq, 'blob': blob})\n"
+        )
+        stop = self.tmp / "reader-stop.flag"
+        reader_src = (
+            "import json, sys, time\n"
+            "from pathlib import Path\n"
+            f"target = Path({str(target)!r})\n"
+            f"stop = Path({str(stop)!r})\n"
+            "deadline = time.time() + 30\n"
+            "reads = 0\n"
+            "while time.time() < deadline:\n"
+            "    payload = json.loads(target.read_text(encoding='utf-8'))\n"
+            "    assert payload['writer'] in ('init', 'A', 'B'), payload['writer']\n"
+            "    assert len(payload['blob']) in (0, 40000), len(payload['blob'])\n"
+            "    reads += 1\n"
+            "    if stop.exists():\n"
+            "        break\n"
+            "print(reads)\n"
+        )
+        writers = [
+            subprocess.Popen([sys.executable, "-c", writer_src, who])
+            for who in ("A", "B")
+        ]
+        reader = subprocess.Popen([sys.executable, "-c", reader_src], stdout=subprocess.PIPE, text=True)
+        for writer in writers:
+            self.assertEqual(writer.wait(timeout=60), 0)
+        stop.write_text("done", encoding="utf-8")
+        reader_out = reader.communicate(timeout=60)
+        self.assertEqual(reader.returncode, 0, reader_out)
+        self.assertGreater(int(reader_out[0].strip()), 0)
+        final = json.loads(target.read_text(encoding="utf-8"))
+        self.assertIn(final["writer"], ("A", "B"))
+        self.assertEqual(len(final["blob"]), 40_000)
+
+    def test_state_lock_serializes_concurrent_processes(self):
+        import subprocess
+        import sys
+        import time
+
+        from guster.util import state_lock
+
+        state = self.tmp / "lock-state"
+        flag = self.tmp / "lock-held.flag"
+        holder_src = (
+            "import sys, time\n"
+            "from pathlib import Path\n"
+            f"sys.path.insert(0, {str(ROOT / 'src')!r})\n"
+            "from guster.util import state_lock\n"
+            f"with state_lock(Path({str(state)!r})):\n"
+            f"    Path({str(flag)!r}).write_text('held')\n"
+            "    time.sleep(1.5)\n"
+        )
+        holder = subprocess.Popen([sys.executable, "-c", holder_src])
+        deadline = time.monotonic() + 10
+        while not flag.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(flag.exists(), "holder never acquired the lock")
+        started = time.monotonic()
+        with state_lock(state):
+            waited = time.monotonic() - started
+        self.assertGreaterEqual(waited, 0.8, "lock acquisition should block until the holder releases")
+        self.assertEqual(holder.wait(timeout=10), 0)
+
+    def test_doctor_and_score_no_write_leave_no_state_files(self):
+        project = self.make_project("nw", "app", git=True, plan_text="# Plan\n\n**最后更新**: 2026-11-01\n")
+        code, _, err = self.run_cli(
+            ["doctor", "--no-write", "--root", str(project), "--scope", "project", "--state-dir", str(self.state)]
+        )
+        self.assertEqual(code, 2, err)  # fake .git dir -> git-unavailable HIGH
+        code, _, err = self.run_cli(
+            ["score", "--no-write", "--root", str(project), "--scope", "project", "--state-dir", str(self.state)]
+        )
+        self.assertEqual(code, 0, err)
+        for name in ("registry.json", "findings.json", "metrics.jsonl"):
+            self.assertFalse((self.state / name).exists(), name)
+
+    def test_corrupt_registry_warns_then_rescans(self):
+        project = self.make_project("cr", "app", plan_text="# Plan\n\n**最后更新**: 2026-11-01\n")
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "registry.json").write_text("{broken", encoding="utf-8")
+        argv = ["status", "--root", str(project), "--scope", "project", "--state-dir", str(self.state)]
+        code, _, err = self.run_cli(argv)
+        self.assertEqual(code, 0, err)
+        self.assertIn("corrupt", err)
+        data = json.loads((self.state / "registry.json").read_text(encoding="utf-8"))
+        self.assertIn("generated_at", data)
+
+        (self.state / "registry.json").unlink()
+        code, _, err = self.run_cli(argv)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("corrupt", err)
+
+        (self.state / "registry.json").write_text("[]", encoding="utf-8")
+        code, _, err = self.run_cli(argv)
+        self.assertEqual(code, 0, err)
+        self.assertIn("not a JSON object", err)
+
+    def test_same_name_projects_get_distinct_ids(self):
+        from guster.discover import unique_project_id
+
+        first = unique_project_id("app", Path("/ws/a/app"))
+        second = unique_project_id("app", Path("/ws/b/app"), {first})
+        self.assertEqual(first, "app")
+        self.assertRegex(second, r"^app-[0-9a-f]{8}$")
+
+        ws = self.tmp / "groups"
+        for group in ("a", "b"):
+            self.make_project(
+                "groups", group, "app", git=True, plan_text="# Plan\n\n**最后更新**: 2026-11-01\n"
+            )
+        registry = scan(self.scan_config([ws], scope="group"))
+        ids = [project["id"] for project in registry["projects"]]
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(len(set(ids)), 2, "project:{id} keys must not overwrite each other")
+        plans = [item for item in registry["artifacts"] if item["kind"] == "plan"]
+        self.assertEqual(len({item["project"] for item in plans}), 2)
+
+    def test_zero_commit_repo_is_not_git_unavailable(self):
+        import subprocess
+
+        from guster.util import git_last_commit_dates
+
+        project = self.make_project("fresh", "app", plan_text="# Plan\n")
+        subprocess.run(["git", "init", "-q", str(project)], check=True)
+        self.assertEqual(git_last_commit_dates(project), {})
+        registry = scan(self.scan_config([project]))
+        self.assertEqual(registry["projects"][0]["git_state"], "ok")
+        policy = run_policy(registry, self.scan_config([project]))
+        self.assertNotIn("git-unavailable", {item["rule"] for item in policy["findings"]})
+        # git has no dates for an untracked plan either -> mtime tier carries it
+        self.assertEqual(policy["stats"]["state_docs_fresh_from_mtime"], 1)
+
+    def test_index_rows_need_backticks_not_substrings(self):
+        from guster.util import is_indexed
+
+        self.assertFalse(is_indexed("a.md", "see `data.md` for details"))
+        self.assertTrue(is_indexed("a.md", "| `a.md` | note |"))
+        self.assertTrue(is_indexed("start-here.md", "| `general/start-here.md` | how |"))
+
+        hub = self.tmp / "icr-hub"
+        write(hub / "AGENTS.md", "# Hub\n")
+        write(hub / "knowledge" / "README.md", "# Knowledge\n\n| File |\n|---|\n| `data.md` |\n")
+        write(hub / "knowledge" / "general" / "data.md", "# Data\n")
+        write(hub / "knowledge" / "general" / "a.md", "# A\n")
+        config = ScanConfig(
+            home=self.home,
+            hub=hub,
+            roots=[],
+            state_dir=self.tmp / "icr-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="hub",
+            now="2026-11-14T00:00:00+08:00",
+        )
+        registry = scan(config)
+        knowledge = {
+            Path(item["path"]).name: item["indexed"]
+            for item in registry["artifacts"]
+            if item["kind"] == "knowledge"
+        }
+        self.assertIs(knowledge["data.md"], True)
+        self.assertIs(knowledge["a.md"], False)
+        policy = run_policy(registry, config)
+        orphans = [
+            example
+            for finding in policy["findings"]
+            if finding["rule"] == "orphan-knowledge"
+            for example in finding["evidence"].get("examples", [])
+        ]
+        self.assertTrue(any("a.md" in example for example in orphans))
+
+    def test_english_date_keys_are_recognized(self):
+        self.assertEqual(extract_verified_date("# Doc\n\nLast updated: 2026-02-01\n"), "2026-02-01")
+        self.assertEqual(extract_verified_date("# Doc\n\n**Updated**: 2026-03-04\n"), "2026-03-04")
+        hub = self.tmp / "en-hub"
+        state = self.tmp / "en-state"
+        init_hub(hub, state, yes=True, dry_run=False)
+        registry_md = hub / "projects" / "_registry.md"
+        registry_md.write_text(
+            registry_md.read_text(encoding="utf-8").replace(
+                "**最后更新**: ", "**Last updated**: "
+            ),
+            encoding="utf-8",
+        )
+        info = validate_hub(hub)
+        self.assertFalse(any("no verified date" in item for item in info["errors"]), info["errors"])
+
+    def test_frontmatter_updated_key_counts_as_declared(self):
+        from guster.discover import artifact_record
+
+        project = self.tmp / "fm" / "app"
+        padding = "".join(f"filler{i}: x\n" for i in range(45))
+        plan = project / ".agents" / "plans" / "plan.md"
+        write(plan, f"---\n{padding}updated: 2026-11-01\n---\n\n# Plan\n")
+        record = artifact_record(plan, "plan", "state", "project", None, None)
+        self.assertEqual(record["verified_at"], "2026-11-01")
+        # the frontmatter sits deeper than the 40-line body scan, so the
+        # declared date can only come from the parsed header
+        self.assertEqual(extract_verified_date(plan.read_text(encoding="utf-8")), "")
+        registry = scan(self.scan_config([project]))
+        policy = run_policy(registry, self.scan_config([project]))
+        self.assertEqual(policy["stats"]["state_docs_fresh_declared"], 1)
+
+    def test_state_freshness_falls_back_to_mtime(self):
+        import time
+
+        project = self.tmp / "mtime" / "app"
+        write(project / "AGENTS.md", "# App\n")
+        write(project / ".agents" / "plans" / "plan.md", "# Plan\n")
+        old = project / ".agents" / "plans" / "old.md"
+        write(old, "# Old\n")
+        stamp = time.mktime((2020, 1, 6, 0, 0, 0, 0, 0, -1))
+        os.utime(old, (stamp, stamp))
+        registry = scan(self.scan_config([project]))
+        policy = run_policy(registry, self.scan_config([project]))
+        stats = policy["stats"]
+        self.assertEqual(stats["state_docs_total"], 2)
+        self.assertEqual(stats["state_docs_fresh"], 1)
+        self.assertEqual(stats["state_docs_fresh_from_mtime"], 1)
+        self.assertTrue(
+            any(
+                item["rule"] == "stale-state" and "older than" in item["title"]
+                for item in policy["findings"]
+            )
+        )
+        metrics = compute_metrics(registry, policy)
+        self.assertEqual(metrics["raw"]["state_docs_fresh_from_mtime"], 1)
+        self.assertIn("1 from mtime", render_report(registry, policy, metrics))
+
+    def test_vanishing_file_records_zero_not_a_crash(self):
+        from guster.discover import artifact_record
+
+        gone = self.tmp / "gone.md"
+        with mock.patch.object(Path, "exists", return_value=True), mock.patch.object(
+            Path, "stat", side_effect=OSError("vanished between exists and stat")
+        ):
+            record = artifact_record(gone, "plan", "state", "project", "p", None)
+        self.assertEqual(record["mtime"], 0)
+        self.assertEqual(record["size"], 0)
+
+    def test_pointer_anchors_follow_config_roots_and_drop_private_dirs(self):
+        from guster.util import resolve_pointer
+
+        base = self.tmp / "notes" / "doc.md"
+        write(base, "# Doc\n")
+        ws = self.tmp / "ws"
+        write(ws / "pkg" / "target.md", "# Target\n")
+        resolved = resolve_pointer("pkg/target.md", base, hub=None, home=self.home, config_roots=[ws])
+        self.assertEqual(resolved, (ws / "pkg" / "target.md").resolve())
+        write(self.home / "IdeaProjects" / "pkg" / "target.md", "# Private layout\n")
+        self.assertIsNone(
+            resolve_pointer("pkg/target.md", base, hub=None, home=self.home),
+            "~/IdeaProjects is no longer a hardcoded pointer anchor",
+        )
+
+    def test_walk_permission_errors_are_counted_into_stats(self):
+        wiki = self.home / ".agents" / "wiki"
+        write(wiki / "README.md", "# Wiki\n")
+        write(wiki / "open" / "note.md", "# Note\n")
+        locked = wiki / "locked"
+        locked.mkdir()
+        (locked / "hidden.md").write_text("# Locked\n", encoding="utf-8")
+        os.chmod(locked, 0o000)
+        try:
+            config = self.scan_config([])
+            registry = scan(config)
+            self.assertGreaterEqual(registry["scan_errors"]["count"], 1)
+            policy = run_policy(registry, config)
+            self.assertGreaterEqual(policy["stats"]["scan_walk_errors"], 1)
+            metrics = compute_metrics(registry, policy)
+            self.assertGreaterEqual(metrics["raw"]["scan_walk_errors"], 1)
+        finally:
+            os.chmod(locked, 0o755)
 
 
 if __name__ == "__main__":
