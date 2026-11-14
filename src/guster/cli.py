@@ -97,6 +97,10 @@ def parse_zones(raw: Any, config_path: Path) -> List[Dict[str, str]]:
         if not isinstance(item, dict) or not str(item.get("path", "")).strip():
             raise ValueError(f"zone entry needs a 'path' in {config_path}: {item!r}")
         zone_path = Path(str(item["path"])).expanduser()
+        if not zone_path.is_absolute():
+            raise ValueError(
+                f"Guster config 'zones' entries must be absolute paths: {item!r} in {config_path}"
+            )
         profile = str(item.get("profile", "light"))
         if not zone_path.is_dir():
             raise ValueError(f"configured zone does not exist: {zone_path.resolve()}")
@@ -120,6 +124,27 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--quiet", action="store_true", help="Only print errors.")
 
 
+def cli_roots(raw: Optional[Sequence[str]]) -> List[Path]:
+    """--root values follow the config roots discipline: existing absolute dirs,
+    so the persisted registry never carries a path that drifts with CWD."""
+    roots: List[Path] = []
+    for item in raw or []:
+        path = Path(item).expanduser()
+        if not path.is_absolute():
+            raise ValueError(f"--root paths must be absolute: {item!r}")
+        roots.append(resolve_root(path))
+    return roots
+
+
+def parse_max_depth(raw: Any, config_path: Path) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        raise ValueError(
+            f"Guster config 'scan_max_depth' must be a positive integer, "
+            f"got {raw!r} ({type(raw).__name__}) in {config_path}"
+        )
+    return raw
+
+
 def build_config(args: argparse.Namespace) -> ScanConfig:
     home = Path.home()
     base_state = Path(args.state_dir).expanduser() if args.state_dir else default_state_dir(home)
@@ -130,7 +155,7 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
     hub: Optional[Path] = None
     if args.hub:
         hub = Path(args.hub).expanduser()
-    elif local.get("hub"):
+    elif "hub" in local:
         raw_hub = local["hub"]
         if not isinstance(raw_hub, str) or not raw_hub.strip():
             raise ValueError(f"Guster config 'hub' must be a path string: {config_path}")
@@ -141,12 +166,14 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
         if not hub.is_dir():
             raise ValueError(f"hub is not a directory: {hub.resolve()}")
 
-    explicit_roots = [resolve_root(Path(item).expanduser()) for item in (args.root or [])]
+    explicit_roots = cli_roots(args.root)
     scope = getattr(args, "scope", "auto") or "auto"
     if scope == "auto":
         scope = "machine" if not explicit_roots else ("project" if len(explicit_roots) == 1 else "group")
     if scope in {"project", "group"} and not explicit_roots:
         raise ValueError("--scope project|group needs at least one --root")
+    if scope == "hub" and hub is None:
+        raise ValueError("--scope hub needs --hub or an attached hub")
     auto_roots = False
     if scope == "hub":
         roots: List[Path] = []
@@ -180,7 +207,7 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
         roots=roots,
         state_dir=state_dir,
         plugin_root=plugin_root,
-        max_depth=int(local.get("scan_max_depth", 5)),
+        max_depth=parse_max_depth(local.get("scan_max_depth", 5), config_path),
         scope=scope,
         zones=zones,
         unconfigured=unconfigured,
@@ -252,9 +279,11 @@ def last_metric(config: ScanConfig) -> Optional[Dict[str, Any]]:
         return None
     try:
         item = json.loads(lines[-1])
-    except ValueError:
+    except ValueError as exc:
+        print(f"[guster] warning: {path} last line is corrupt ({exc}); no cached metric shown", file=sys.stderr)
         return None
     if not isinstance(item, dict):
+        print(f"[guster] warning: {path} last line is not a JSON object; no cached metric shown", file=sys.stderr)
         return None
     item.setdefault("generated_at", item.get("at"))
     return item
@@ -532,7 +561,7 @@ def cmd_init(args: argparse.Namespace) -> int:
                     elif kind == "write":
                         print(f"  {index}. write {operation['path']}")
     else:
-        explicit_roots = [resolve_root(Path(item).expanduser()) for item in (args.root or [])]
+        explicit_roots = cli_roots(args.root)
         result = init_home(
             state_dir,
             yes=args.yes,
@@ -563,8 +592,12 @@ def cmd_hub(args: argparse.Namespace) -> int:
     action = args.hub_action
     local = load_config(state_dir / "config.json")
     attached: Optional[Path] = None
-    raw_hub = local.get("hub")
-    if isinstance(raw_hub, str) and raw_hub.strip():
+    if "hub" in local:
+        raw_hub = local["hub"]
+        if not isinstance(raw_hub, str) or not raw_hub.strip():
+            raise ValueError(
+                f"Guster config 'hub' must be a path string: {state_dir / 'config.json'}"
+            )
         attached = Path(raw_hub).expanduser()
     if attached is None and not getattr(args, "path", None) and not getattr(args, "hub", None):
         if action == "status":

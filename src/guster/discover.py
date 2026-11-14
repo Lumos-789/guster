@@ -763,7 +763,10 @@ def scan_zones(
 
 
 def extra_skill_roots() -> List[Tuple[str, Path]]:
-    """Extra skill hosts from GUSTER_EXTRA_SKILL_ROOTS (name=path, os.pathsep separated)."""
+    """Extra skill hosts from GUSTER_EXTRA_SKILL_ROOTS (name=path, os.pathsep separated).
+
+    Declared hosts are configuration, not guesses: a malformed entry or a missing
+    directory stops the run instead of silently dropping the host."""
     roots: List[Tuple[str, Path]] = []
     for item in os.environ.get("GUSTER_EXTRA_SKILL_ROOTS", "").split(os.pathsep):
         item = item.strip()
@@ -771,8 +774,13 @@ def extra_skill_roots() -> List[Tuple[str, Path]]:
             continue
         name, sep, raw = item.partition("=")
         if not sep or not name.strip() or not raw.strip():
-            continue
-        roots.append((name.strip(), Path(raw.strip()).expanduser()))
+            raise ValueError(f"GUSTER_EXTRA_SKILL_ROOTS entries must be name=path: {item!r}")
+        root = Path(raw.strip()).expanduser()
+        if not root.is_dir():
+            raise ValueError(
+                f"GUSTER_EXTRA_SKILL_ROOTS host {name.strip()!r} directory does not exist: {root}"
+            )
+        roots.append((name.strip(), root))
     return roots
 
 

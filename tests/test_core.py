@@ -1265,17 +1265,47 @@ class PlanValidationTests(unittest.TestCase):
 
 
 class ExtraSkillRootTests(unittest.TestCase):
-    def test_parses_extra_roots_from_env(self):
-        value = os.pathsep.join(["alpha=/tmp/a", "beta=/tmp/b"])
-        with mock.patch.dict(os.environ, {"GUSTER_EXTRA_SKILL_ROOTS": value}):
-            roots = extra_skill_roots()
-        self.assertEqual(roots, [("alpha", Path("/tmp/a")), ("beta", Path("/tmp/b"))])
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="guster-xroots-"))
 
-    def test_ignores_malformed_entries(self):
-        value = os.pathsep.join(["oops", "=missing-name", "name=", "good=/tmp/g"])
+    def tearDown(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_parses_extra_roots_from_env(self):
+        alpha = self.tmp / "alpha"
+        beta = self.tmp / "beta"
+        alpha.mkdir()
+        beta.mkdir()
+        value = os.pathsep.join([f"alpha={alpha}", f"beta={beta}"])
         with mock.patch.dict(os.environ, {"GUSTER_EXTRA_SKILL_ROOTS": value}):
             roots = extra_skill_roots()
-        self.assertEqual(roots, [("good", Path("/tmp/g"))])
+        self.assertEqual(roots, [("alpha", alpha), ("beta", beta)])
+
+    def test_malformed_entries_fail_loud(self):
+        for bad in ("oops", "=missing-name", "name="):
+            with self.subTest(entry=bad):
+                with mock.patch.dict(os.environ, {"GUSTER_EXTRA_SKILL_ROOTS": bad}):
+                    with self.assertRaises(ValueError) as caught:
+                        extra_skill_roots()
+                self.assertIn("GUSTER_EXTRA_SKILL_ROOTS", str(caught.exception))
+                self.assertIn("name=path", str(caught.exception))
+
+    def test_missing_host_directory_fails_loud(self):
+        gone = self.tmp / "gone"
+        with mock.patch.dict(os.environ, {"GUSTER_EXTRA_SKILL_ROOTS": f"host={gone}"}):
+            with self.assertRaises(ValueError) as caught:
+                extra_skill_roots()
+        self.assertIn("host 'host'", str(caught.exception))
+        self.assertIn("does not exist", str(caught.exception))
+
+    def test_empty_segments_stay_cosmetic(self):
+        host = self.tmp / "host"
+        host.mkdir()
+        with mock.patch.dict(os.environ, {"GUSTER_EXTRA_SKILL_ROOTS": f":host={host}::"}):
+            roots = extra_skill_roots()
+        self.assertEqual(roots, [("host", host)])
 
 
 class StructuredNoteHeaderTests(unittest.TestCase):
@@ -2518,6 +2548,181 @@ class ReportPlanRegistryTests(unittest.TestCase):
         gone = self.tmp / "vanished.md"
         with mock.patch.object(Path, "stat", side_effect=OSError("gone")):
             self.assertIsNone(age_days(gone))
+
+
+class ConfigDisciplineSweepTests(unittest.TestCase):
+    """0.9.0 closeout sweep: entry points the phase-1 config discipline missed —
+    scan_max_depth typing, hub key presence over truthiness, --scope hub guard,
+    zone/--root absolute paths, attach vs corrupt config, metrics tail health,
+    and the de-privatized resident-budget suggestion."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="guster-sweep-"))
+        self.home = self.tmp / "home"
+        self.code = self.home / "code"
+        self.proj = self.code / "app"
+        (self.proj / ".git").mkdir(parents=True)
+        write(self.proj / "AGENTS.md", "# App\n")
+        self.state = self.tmp / "state"
+
+    def tearDown(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def run_cli(self, argv, home=None):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"HOME": str(home or self.home)}):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = cli.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def write_config(self, payload, state=None) -> None:
+        state = state or self.state
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "config.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def scan_state(self):
+        return self.run_cli(["scan", "--state-dir", str(self.state)])
+
+    def test_scan_max_depth_bad_shapes_fail_loud(self) -> None:
+        cases = [None, True, "3", -2, 0, 2.5]
+        for value in cases:
+            with self.subTest(value=value):
+                self.write_config(
+                    {"version": 1, "roots": [str(self.code)], "scan_max_depth": value}
+                )
+                code, _, err = self.scan_state()
+                self.assertEqual(code, 1, err)
+                self.assertIn("'scan_max_depth'", err)
+                self.assertIn("positive integer", err)
+                self.assertFalse((self.state / "registry.json").exists())
+
+    def test_scan_max_depth_positive_int_is_accepted(self) -> None:
+        self.write_config({"version": 1, "roots": [str(self.code)], "scan_max_depth": 2})
+        code, _, err = self.scan_state()
+        self.assertEqual(code, 0, err)
+
+    def test_hub_key_presence_over_truthiness(self) -> None:
+        for value in ("", None):
+            with self.subTest(value=value):
+                self.write_config({"version": 1, "roots": [str(self.code)], "hub": value})
+                code, _, err = self.scan_state()
+                self.assertEqual(code, 1, err)
+                self.assertIn("'hub' must be a path string", err)
+                self.assertFalse((self.state / "registry.json").exists())
+
+    def test_hub_subcommand_reads_attached_hub_by_presence(self) -> None:
+        self.write_config({"version": 1, "hub": ""})
+        code, _, err = self.run_cli(["hub", "status", "--state-dir", str(self.state)])
+        self.assertEqual(code, 1)
+        self.assertIn("'hub' must be a path string", err)
+
+    def test_scope_hub_without_a_hub_fails_loud(self) -> None:
+        code, _, err = self.run_cli(["scan", "--scope", "hub", "--state-dir", str(self.state)])
+        self.assertEqual(code, 1)
+        self.assertIn("--scope hub needs", err)
+        self.assertFalse((self.state / "registry.json").exists())
+
+        plain = self.tmp / "plain-hub"
+        plain.mkdir()
+        code, _, err = self.run_cli(
+            ["scan", "--scope", "hub", "--hub", str(plain), "--state-dir", str(self.state)]
+        )
+        self.assertEqual(code, 0, err)
+
+    def test_config_zone_paths_must_be_absolute(self) -> None:
+        (self.tmp / "relzone").mkdir()
+        self.write_config(
+            {
+                "version": 1,
+                "roots": [str(self.code)],
+                "zones": [{"path": "relzone", "profile": "light"}],
+            }
+        )
+        code, _, err = self.scan_state()
+        self.assertEqual(code, 1, err)
+        self.assertIn("'zones' entries must be absolute paths", err)
+        self.assertFalse((self.state / "registry.json").exists())
+
+    def test_zones_add_refuses_a_relative_path(self) -> None:
+        (self.tmp / "relws").mkdir()
+        fresh = self.tmp / "fresh-state"
+        cwd = os.getcwd()
+        os.chdir(self.tmp)
+        try:
+            code, _, err = self.run_cli(["zones", "add", "relws", "--state-dir", str(fresh)])
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(code, 1, err)
+        self.assertIn("absolute", err)
+        self.assertFalse((fresh / "config.json").exists())
+
+    def test_cli_root_and_init_root_must_be_absolute(self) -> None:
+        code, _, err = self.run_cli(["scan", "--root", "relws", "--state-dir", str(self.state)])
+        self.assertEqual(code, 1)
+        self.assertIn("--root paths must be absolute", err)
+
+        code, _, err = self.run_cli(["init", "--yes", "--root", "relws", "--state-dir", str(self.state)])
+        self.assertEqual(code, 1)
+        self.assertIn("--root paths must be absolute", err)
+        self.assertFalse((self.state / "config.json").exists())
+
+    def test_attach_hub_refuses_a_corrupt_config(self) -> None:
+        hub = self.tmp / "mini-hub"
+        init_hub(hub, self.tmp / "mini-hub-state", yes=True, dry_run=False)
+        truncated = '{"version": 1, "roots": ["' + str(self.code) + '"], "zones": [{"path"'
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "config.json").write_text(truncated, encoding="utf-8")
+
+        with self.assertRaises(ValueError) as caught:
+            attach_hub(self.state, hub)
+        self.assertIn("cannot read Guster config", str(caught.exception))
+        # the damaged config stays on disk untouched instead of being reset
+        self.assertEqual((self.state / "config.json").read_text(encoding="utf-8"), truncated)
+
+        code, _, err = self.run_cli(["hub", "attach", "--path", str(hub), "--state-dir", str(self.state)])
+        self.assertEqual(code, 1)
+        self.assertIn("cannot read Guster config", err)
+        self.assertEqual((self.state / "config.json").read_text(encoding="utf-8"), truncated)
+
+    def test_status_warns_when_the_metrics_tail_is_unusable(self) -> None:
+        code, _, err = self.run_cli(["score", "--root", str(self.code), "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        metrics_path = self.state / "metrics.jsonl"
+        self.assertTrue(metrics_path.is_file())
+
+        with metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write('{"at": "broken\n')
+        code, _, err = self.run_cli(["status", "--root", str(self.code), "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("[guster] warning:", err)
+        self.assertIn("corrupt", err)
+
+        lines = metrics_path.read_text(encoding="utf-8").splitlines()
+        lines[-1] = "[1]"
+        metrics_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        code, _, err = self.run_cli(["status", "--root", str(self.code), "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("not a JSON object", err)
+
+    def test_resident_budget_hub_suggestion_is_generic(self) -> None:
+        fx = Fixture()
+        try:
+            write(fx.hub / "AGENTS.md", "# Hub\n" + "\n".join(f"rule {i}" for i in range(60)) + "\n")
+            result = run_policy(fx.registry(), fx.config())
+            hits = [
+                item
+                for item in result["findings"]
+                if item["rule"] == "resident-budget"
+                and str(fx.hub / "AGENTS.md") in item["path"]
+                and "soft line budget" in item["title"]
+            ]
+            self.assertEqual(len(hits), 1)
+            self.assertNotIn("guster-hub-reference", hits[0]["suggestion"])
+            self.assertIn("knowledge/general", hits[0]["suggestion"])
+        finally:
+            fx.cleanup()
 
 
 if __name__ == "__main__":

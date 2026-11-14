@@ -263,7 +263,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                 "Hub instruction exceeds soft line budget",
                 str(hub_agents),
                 f"{count_lines(hub_agents)} lines; soft target is 50.",
-                "Move detail into guster-hub-reference.md.",
+                "Move detail into a knowledge reference doc under knowledge/general/.",
             )
         )
 

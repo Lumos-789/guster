@@ -8,7 +8,7 @@ from . import __version__
 from .executor import apply_plan
 from .layout import DEFAULT_PATHS, load_manifest, resolve_hub_layout, validate_layout_value
 from .planner import build_plan, op_mkdir, op_write, save_plan
-from .util import is_indexed, load_json, now_iso, read_text, save_json, today_iso, unique_suffix
+from .util import is_indexed, load_json_strict, now_iso, read_text, save_json, today_iso, unique_suffix
 
 
 def default_hub_path(home: Path) -> Path:
@@ -217,9 +217,15 @@ def attach_hub(state_dir: Path, target: Path) -> Dict[str, Any]:
     hub = target.expanduser().resolve()
     state_dir.mkdir(parents=True, exist_ok=True)
     config_path = state_dir / "config.json"
-    config = load_json(config_path, {})
-    if not isinstance(config, dict):
-        config = {}
+    data, error = load_json_strict(config_path)
+    if error is not None:
+        raise ValueError(f"cannot read Guster config {config_path}: {error}")
+    if data is None:
+        config: Dict[str, Any] = {}
+    elif not isinstance(data, dict):
+        raise ValueError(f"Guster config must be a JSON object: {config_path}")
+    else:
+        config = data
     backup: Optional[Path] = None
     if config_path.is_file():
         backup_dir = state_dir / "backups"
