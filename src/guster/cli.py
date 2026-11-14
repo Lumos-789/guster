@@ -792,11 +792,13 @@ def cmd_credentials(args: argparse.Namespace) -> int:
         return 0
     if not args.quiet:
         print(f"registry: {info.get('path') or '(missing)'}")
+        for warning in info.get("parse_warnings") or []:
+            print(f"  warning: {warning}")
         for scope in ("company", "personal", "unknown"):
             items = scopes.pop(scope, [])
             if not items:
                 continue
-            label = {"company": "公司", "personal": "个人", "unknown": "未分类"}[scope]
+            label = {"company": "company 公司", "personal": "personal 个人", "unknown": "unknown 未分类"}[scope]
             print(f"\n{label}（{len(items)}）")
             for entry in items:
                 keys = f" [{entry['keys']}]" if entry.get("keys") not in {"", "-"} else ""

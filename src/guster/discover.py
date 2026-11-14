@@ -547,6 +547,8 @@ def artifact_record(
             tracked_flag = str(path.resolve().relative_to(base.resolve())) in tracked
         except (OSError, ValueError):
             tracked_flag = False
+    oversized = size > HASH_LIMIT
+    file_hash = "" if oversized else sha256_file(path)
     return {
         "path": str(path),
         "rel": relative(path, base) if base else str(path),
@@ -556,7 +558,8 @@ def artifact_record(
         "project": project_id,
         "size": size,
         "mtime": mtime,
-        "hash": sha256_file(path) if size <= HASH_LIMIT else "",
+        "hash": file_hash,
+        "hash_error": not oversized and not file_hash,
         "frontmatter": frontmatter,
         "title": first_heading(body if text else "", path.stem),
         "indexed": indexed,
@@ -927,15 +930,22 @@ def scan_credential_registry(home: Path) -> Dict[str, Any]:
     """Read the credential registry table; it never contains secret values."""
     path = home / ".agents" / "credentials" / "registry.md"
     entries: List[Dict[str, str]] = []
+    warnings: List[str] = []
     if path.is_file():
-        for line in read_text(path, limit=1_000_000).splitlines():
+        for line_no, line in enumerate(read_text(path, limit=1_000_000).splitlines(), start=1):
             stripped = line.strip()
             if not stripped.startswith("|"):
                 continue
             cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-            if len(cells) < 6:
-                continue
             if cells[0] in {"ID", ""} or set(cells[0]) <= {"-", ":"}:
+                continue
+            if len(cells) < 6:
+                # An entry-shaped row that cannot be an entry is a broken row,
+                # not silence: ID|scope|site|account|kind|locations are required.
+                warnings.append(
+                    f"line {line_no}: expected at least 6 columns "
+                    f"(ID|scope|site|account|kind|locations), got {len(cells)}: {stripped[:80]}"
+                )
                 continue
             entries.append(
                 {
@@ -950,7 +960,11 @@ def scan_credential_registry(home: Path) -> Dict[str, Any]:
                     "status": cells[8] if len(cells) > 8 else "",
                 }
             )
-    return {"path": str(path) if path.is_file() else None, "entries": entries}
+    return {
+        "path": str(path) if path.is_file() else None,
+        "entries": entries,
+        "parse_warnings": warnings,
+    }
 
 
 def infer_secret_kind(path: Path) -> str:

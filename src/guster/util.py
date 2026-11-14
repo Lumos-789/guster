@@ -188,6 +188,11 @@ def slugify(value: str) -> str:
     return value or "item"
 
 
+def unique_suffix(length: int = 3) -> str:
+    """Random hex tail; same-second plan ids and backups must not overwrite."""
+    return os.urandom(length).hex()
+
+
 def human_bytes(value: int) -> str:
     if value < 1024:
         return f"{value} B"
@@ -694,11 +699,12 @@ def resolve_pointer(
     return candidates[0]
 
 
-def age_days(path: Path) -> float:
+def age_days(path: Path) -> Optional[float]:
+    """Age in days; None when stat fails — unknown age, never a fake zero."""
     try:
         return max(0.0, (time.time() - path.stat().st_mtime) / 86400.0)
     except OSError:
-        return 0.0
+        return None
 
 
 def parse_date(value: str) -> Optional[datetime]:

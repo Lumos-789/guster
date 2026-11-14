@@ -15,6 +15,7 @@ from .util import (
     extract_naked_pointers,
     extract_pointers,
     git_last_commit_dates,
+    load_json,
     note_header_date,
     parse_date,
     parse_note_header,
@@ -111,6 +112,56 @@ def suggest_slot(name: str, is_dir: bool) -> str:
     return "plans"
 
 
+REGISTRY_PATH_COLUMN = re.compile(r"path|路径", re.IGNORECASE)
+REGISTRY_ROW_SKIP = {"", "-", "—", ".", ".."}
+# `host:/path` (and URLs) reference another machine; a local three-way diff
+# can never see them, so they are counted apart instead of drifting forever.
+REGISTRY_REMOTE_FORM = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def parse_registry_rows(text: str) -> List[Dict[str, str]]:
+    """CTX-10: the hub's human project table, read through its path column.
+
+    The column whose header mentions "path"/"路径" holds one location per row
+    (`~/...`, absolute, or relative to the hub root); the slug column never
+    counts as a path."""
+    rows: List[Dict[str, str]] = []
+    path_index: Optional[int] = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip().strip("`").rstrip("/") for cell in stripped.strip("|").split("|")]
+        if not cells:
+            continue
+        if path_index is None:
+            for index, cell in enumerate(cells):
+                if REGISTRY_PATH_COLUMN.search(cell):
+                    path_index = index
+                    break
+            continue
+        if cells[0] in {"ID", "slug", ""} or set(cells[0]) <= {"-", ":"}:
+            continue
+        raw = cells[path_index] if path_index < len(cells) else ""
+        if raw in REGISTRY_ROW_SKIP:
+            continue
+        rows.append({"slug": cells[0], "path": raw})
+    return rows
+
+
+def resolve_registry_row_path(raw: str, hub_root: Path, home: Path) -> Optional[Path]:
+    """A registry row path resolves against the hub root, `~` or an absolute."""
+    value = raw.strip().rstrip("/")
+    if not value:
+        return None
+    if value.startswith("~"):
+        return home / value[2:]
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return candidate
+    return (hub_root / candidate).resolve()
+
+
 def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     findings: List[Dict[str, Any]] = []
     stats: Dict[str, Any] = {
@@ -146,6 +197,12 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         "pointer_files_scanned": 0,
         "git_probe_failures": 0,
         "inline_bearers": 0,
+        "registry_rows": 0,
+        "registry_rows_remote": 0,
+        "registry_drift_dead_rows": 0,
+        "registry_drift_unscanned_rows": 0,
+        "registry_drift_unregistered": 0,
+        "registry_drift_stale_machine": 0,
         "scan_walk_errors": int((registry.get("scan_errors") or {}).get("count") or 0),
     }
     home = config.home
@@ -734,7 +791,8 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
         if not tmp_root.is_dir():
             continue
         for path in tmp_root.rglob("*"):
-            if path.is_file() and age_days(path) > 14:
+            age = age_days(path)
+            if age is not None and age > 14 and path.is_file():
                 tmp_old.append(str(path))
     if tmp_old:
         findings.append(
@@ -769,7 +827,128 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
             )
         )
 
-    scope = getattr(config, "scope", "machine")
+    # Registry drift (CTX-10): the machine table (registry.json), the hub's
+    # human table (_registry.md path column) and the git roots on disk each
+    # claim to know which projects exist; disagreement is a finding, never a
+    # CHI dimension. The human side needs a hub; the machine↔disk edge stands
+    # on its own for hub-less users.
+    if hub is not None and not (hub / "hub.yaml").is_file() and not (hub / "AGENTS.md").is_file():
+        findings.append(
+            finding(
+                "hub-manifest-missing",
+                "high",
+                "Attached hub is not recognizable as a hub",
+                str(hub),
+                f"{hub} has neither hub.yaml nor AGENTS.md, so no hub contract applies to it.",
+                "Point config/--hub at a real hub (`guster hub init`), or drop the hub setting.",
+                {"hub": str(hub)},
+            )
+        )
+    machine_paths: Set[str] = set()
+    machine_projects: Set[str] = set()
+    for project in projects:
+        try:
+            key = str(Path(project["path"]).resolve())
+        except OSError:
+            continue
+        machine_paths.add(key)
+        if not project.get("container"):
+            machine_projects.add(key)
+    human_paths: Set[str] = set()
+    dead_rows: List[str] = []
+    unscanned_rows: List[str] = []
+    registry_md: Optional[Path] = None
+    if hub is not None:
+        projects_root = hub_layout.get("projects")
+        registry_md = (projects_root / "_registry.md") if projects_root else None
+        if registry_md is not None and registry_md.is_file():
+            hub_root = hub.expanduser().resolve()
+            for row in parse_registry_rows(read_text(registry_md, limit=1_000_000)):
+                if REGISTRY_REMOTE_FORM.match(row["path"]):
+                    stats["registry_rows_remote"] += 1
+                    continue
+                resolved = resolve_registry_row_path(row["path"], hub_root, home)
+                if resolved is None:
+                    continue
+                try:
+                    key = str(resolved.resolve())
+                except OSError:
+                    continue
+                human_paths.add(key)
+                if not resolved.exists():
+                    dead_rows.append(row["path"])
+                elif scope == "machine" and key not in machine_paths:
+                    unscanned_rows.append(row["path"])
+    stats["registry_rows"] = len(human_paths)
+    stats["registry_drift_dead_rows"] = len(dead_rows)
+    stats["registry_drift_unscanned_rows"] = len(unscanned_rows)
+    if registry_md is not None and registry_md.is_file():
+        if dead_rows:
+            findings.append(
+                finding(
+                    "registry-drift",
+                    "medium",
+                    "Hub registry rows point at paths that do not exist",
+                    str(registry_md),
+                    f"{len(dead_rows)} row(s) in the human registry name a path that is not on disk.",
+                    "Fix the row path, or delete the row; a registry row must resolve to the project directory.",
+                    {"count": len(dead_rows), "rows": dead_rows[:10]},
+                )
+            )
+        if unscanned_rows:
+            findings.append(
+                finding(
+                    "registry-drift",
+                    "medium",
+                    "Hub registry rows are outside the machine scan",
+                    str(registry_md),
+                    f"{len(unscanned_rows)} registered path(s) exist but the scan never records them; "
+                    "the machine table cannot see what the human table claims.",
+                    "Add the containing directory to the configured roots (guster init/zones), or fix the row path.",
+                    {"count": len(unscanned_rows), "rows": unscanned_rows[:10]},
+                )
+            )
+        unregistered = sorted(machine_projects - human_paths)
+        stats["registry_drift_unregistered"] = len(unregistered)
+        if unregistered:
+            findings.append(
+                finding(
+                    "registry-drift",
+                    "low",
+                    "Scanned projects are not registered in the hub",
+                    unregistered[0],
+                    f"{len(unregistered)} scanned project(s) have no row in the human registry.",
+                    "Add a CTX-10 row per project, or waive deliberately unregistered ones in hub.yaml.",
+                    {"count": len(unregistered), "examples": unregistered[:10]},
+                )
+            )
+    persisted_registry = load_json(config.state_dir / "registry.json", None)
+    if isinstance(persisted_registry, dict) and isinstance(persisted_registry.get("projects"), list):
+        persisted_paths: Set[str] = set()
+        for project in persisted_registry["projects"]:
+            if not isinstance(project, dict) or not project.get("path"):
+                continue
+            try:
+                persisted_paths.add(str(Path(project["path"]).resolve()))
+            except OSError:
+                continue
+        if persisted_paths != machine_paths:
+            vanished = sorted(persisted_paths - machine_paths)
+            appeared = sorted(machine_paths - persisted_paths)
+            stats["registry_drift_stale_machine"] = len(vanished) + len(appeared)
+            findings.append(
+                finding(
+                    "registry-drift",
+                    "low",
+                    "Machine registry is out of date with disk",
+                    str(config.state_dir / "registry.json"),
+                    f"{len(vanished)} project(s) listed in registry.json no longer scan; "
+                    f"{len(appeared)} on disk are missing from it.",
+                    "Re-run `guster scan`/`guster doctor` without --no-write to refresh the machine table.",
+                    {"vanished": vanished[:10], "appeared": appeared[:10]},
+                )
+            )
+
     scoped = scope_roots(config)
     if scoped is not None:
         kept = [

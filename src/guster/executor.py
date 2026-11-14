@@ -6,11 +6,42 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .discover import default_roots
-from .util import now_iso, write_text
+from .util import now_iso, unique_suffix, write_text
 
 
 class ApplyError(RuntimeError):
     pass
+
+
+BACKUPS_KEEP = 10
+
+
+def prune_backups(state_dir: Path, keep: int = BACKUPS_KEEP) -> List[str]:
+    """Keep the newest `keep` plan backup directories; hub-config files and
+    anything unexpected in backups/ stay untouched."""
+    root = state_dir / "backups"
+    if not root.is_dir():
+        return []
+
+    def stamp(item: Path) -> float:
+        try:
+            return item.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    dirs = sorted(
+        (item for item in root.iterdir() if item.is_dir()),
+        key=stamp,
+        reverse=True,
+    )
+    removed: List[str] = []
+    for item in dirs[keep:]:
+        try:
+            shutil.rmtree(item)
+        except OSError:
+            continue
+        removed.append(str(item))
+    return removed
 
 
 def preflight(plan: Dict[str, Any]) -> List[str]:
@@ -146,9 +177,21 @@ def apply_plan(
             else:
                 raise ApplyError(f"unsupported operation: {kind}")
     except Exception as exc:
-        rollback(undo)
+        rollback_error: Optional[BaseException] = None
+        try:
+            rollback(undo)
+        except BaseException as undo_exc:  # noqa: BLE001 - reported, never hidden
+            rollback_error = undo_exc
+        if rollback_error is not None:
+            # Both the apply and the rollback failed: keep the root cause and
+            # name the recovery material instead of swallowing either.
+            raise ApplyError(
+                f"apply failed ({exc}); rollback also failed ({rollback_error}) — "
+                f"backups for manual recovery: {backup_dir}"
+            ) from exc
         raise ApplyError(f"apply failed and was rolled back: {exc}") from exc
 
+    pruned = prune_backups(state_dir)
     return {
         "ok": True,
         "dry_run": False,
@@ -157,6 +200,7 @@ def apply_plan(
         "applied": applied,
         "skipped": skipped,
         "backup": str(backup_dir),
+        "pruned_backups": pruned,
         "finished_at": now_iso(),
     }
 
@@ -228,7 +272,7 @@ def init_home(
         )
     plan = {
         "version": 1,
-        "id": f"init-home-{now_iso().replace(':', '').replace('-', '')}",
+        "id": f"init-home-{now_iso().replace(':', '').replace('-', '')}-{unique_suffix()}",
         "created_at": now_iso(),
         "title": "Initialize Guster state home",
         "notes": "Creates the local state directory and default config.",

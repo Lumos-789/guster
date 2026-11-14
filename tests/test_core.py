@@ -27,7 +27,7 @@ from guster.metrics import compute_metrics  # noqa: E402
 from guster.planner import load_plan, plan_init_project, plan_move  # noqa: E402
 from guster.policy import extract_filename_date, extract_verified_date, run_policy  # noqa: E402
 from guster.util import note_header_date  # noqa: E402
-from guster.report import render_report  # noqa: E402
+from guster.report import next_actions, render_report  # noqa: E402
 from guster.util import extract_naked_pointers, extract_pointers  # noqa: E402
 
 
@@ -2116,6 +2116,408 @@ class DataAndConcurrencyTests(unittest.TestCase):
             self.assertGreaterEqual(metrics["raw"]["scan_walk_errors"], 1)
         finally:
             os.chmod(locked, 0o755)
+
+
+class ReportPlanRegistryTests(unittest.TestCase):
+    """0.9.0 phase 3: registry drift, dynamic next actions, plan plumbing."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="guster-p3-"))
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        self.state = self.tmp / "state"
+
+    def tearDown(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def run_cli(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = cli.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def make_project(self, *parts, git=False) -> Path:
+        project = self.tmp.joinpath(*parts)
+        write(project / "AGENTS.md", "# App\n")
+        write(project / ".agents" / "README.md", "# Index\n")
+        write(project / ".agents" / "plans" / "plan.md", "# Plan\n\n**最后更新**: 2026-11-14\n")
+        if git:
+            (project / ".git").mkdir(parents=True)
+        return project
+
+    def drift_rules(self, policy_result):
+        return [
+            item for item in policy_result["findings"] if item["rule"] == "registry-drift"
+        ]
+
+    def test_registry_drift_tracks_the_human_table(self) -> None:
+        hub = self.tmp / "dr-hub"
+        hub_state = self.tmp / "dr-hub-state"
+        init_hub(hub, hub_state, yes=True, dry_run=False)
+        ws = self.tmp / "dr-ws"
+        self.make_project("dr-ws", "app", git=True)
+        outside = self.tmp / "dr-outside"
+        outside.mkdir()
+        registry_md = hub / "projects" / "_registry.md"
+
+        def run_policy_now():
+            config = ScanConfig(
+                home=self.home,
+                hub=hub,
+                roots=[ws],
+                state_dir=self.tmp / "dr-policy-state",
+                plugin_root=ROOT,
+                max_depth=3,
+                scope="machine",
+                now="2026-11-14T00:00:00+08:00",
+            )
+            return run_policy(scan(config), config)
+
+        base = registry_md.read_text(encoding="utf-8")
+        registered = base + "| app | App | ../dr-ws/app/ | - |\n"
+        registry_md.write_text(registered, encoding="utf-8")
+        self.assertEqual(self.drift_rules(run_policy_now()), [])
+
+        # tamper one row -> dead-path finding appears; restoring removes it
+        tampered = base + "| app | App | ../dr-ws/gone/ | - |\n"
+        registry_md.write_text(tampered, encoding="utf-8")
+        drift = self.drift_rules(run_policy_now())
+        self.assertTrue(any("do not exist" in item["title"] for item in drift))
+        registry_md.write_text(registered, encoding="utf-8")
+        self.assertEqual(self.drift_rules(run_policy_now()), [])
+
+        # a row outside the scan roots exists but the machine never sees it
+        outside_row = registered + "| tool | Tool | ../dr-outside/ | - |\n"
+        registry_md.write_text(outside_row, encoding="utf-8")
+        drift = self.drift_rules(run_policy_now())
+        self.assertTrue(any("outside the machine scan" in item["title"] for item in drift))
+
+        # deleting the row leaves the scanned project unregistered
+        registry_md.write_text(base + "| tool | Tool | ../dr-outside/ | - |\n", encoding="utf-8")
+        drift = self.drift_rules(run_policy_now())
+        self.assertTrue(any("not registered" in item["title"] for item in drift))
+        self.assertTrue(any("outside the machine scan" not in item["title"] for item in drift))
+
+        # a remote `host:/path` row names another machine: counted apart,
+        # never drifted against the local disk
+        remote_row = registered + "| garden | Garden | garden:/Users/Shared/garden | - |\n"
+        registry_md.write_text(remote_row, encoding="utf-8")
+        result = run_policy_now()
+        drift = self.drift_rules(result)
+        self.assertFalse(
+            any("do not exist" in item["title"] for item in drift),
+            [item["title"] for item in drift],
+        )
+        self.assertEqual(result["stats"]["registry_rows_remote"], 1)
+
+    def test_machine_registry_drift_without_a_hub(self) -> None:
+        import subprocess
+        import sys
+
+        from guster.util import save_json
+
+        ws = self.tmp / "st-ws"
+        self.make_project("st-ws", "app", git=True)
+        state = self.tmp / "st-state"
+        state.mkdir(parents=True)
+        (state / "config.json").write_text(
+            json.dumps({"version": 1, "roots": [str(ws)]}), encoding="utf-8"
+        )
+        env = {"HOME": str(self.home), "PATH": os.environ.get("PATH", "")}
+        # a real git repo keeps git-unavailable out of the picture
+        subprocess.run([sys.executable, "-c", "pass"], env=env, check=True)
+        save_json(
+            state / "registry.json",
+            {"version": 1, "projects": [{"path": str(ws / "gone")}], "summary": {}},
+        )
+        code, out, err = self.run_cli(["doctor", "--no-write", "--state-dir", str(state), "--json"])
+        self.assertEqual(code, 2, err)  # git-unavailable HIGH from the fake .git
+        policy = json.loads(out)
+        drift = [item for item in policy["findings"] if item["rule"] == "registry-drift"]
+        self.assertTrue(any("out of date" in item["title"] for item in drift), drift)
+
+        code, out, err = self.run_cli(["doctor", "--state-dir", str(state), "--json"])
+        policy = json.loads(out)
+        self.assertEqual(
+            [item for item in policy["findings"] if item["rule"] == "registry-drift"],
+            [],
+        )
+
+    def test_hub_pointing_at_a_plain_directory_is_a_finding(self) -> None:
+        ws = self.tmp / "pm-ws"
+        self.make_project("pm-ws", "app", git=True)
+        state = self.tmp / "pm-state"
+        state.mkdir(parents=True)
+        (state / "config.json").write_text(
+            json.dumps({"version": 1, "roots": [str(ws)]}), encoding="utf-8"
+        )
+        plain = self.tmp / "plain-dir"
+        plain.mkdir()
+        code, out, err = self.run_cli(
+            ["doctor", "--hub", str(plain), "--state-dir", str(state), "--json"]
+        )
+        self.assertEqual(code, 2, err)
+        policy = json.loads(out)
+        rules = {item["rule"] for item in policy["findings"]}
+        self.assertIn("hub-manifest-missing", rules)
+
+    def test_doctor_exit_codes_are_critical_3_high_2(self) -> None:
+        import subprocess
+
+        # HIGH: a fake .git dir cannot answer git -> git-unavailable
+        high_proj = self.make_project("exit", "fake-git", git=True)
+        code, _, err = self.run_cli(
+            ["doctor", "--root", str(high_proj), "--scope", "project", "--state-dir", str(self.tmp / "exit-h")]
+        )
+        self.assertEqual(code, 2, err)
+
+        # CRITICAL: a committed .env is secret-in-git
+        crit_proj = self.make_project("exit", "leaky")
+        write(crit_proj / ".env", "TOKEN=not-a-real-token\n")
+        subprocess.run(["git", "init", "-q", str(crit_proj)], check=True)
+        subprocess.run(["git", "-C", str(crit_proj), "add", "-A"], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(crit_proj),
+                "-c", "user.email=t@example.com", "-c", "user.name=t",
+                "commit", "-q", "-m", "init",
+            ],
+            check=True,
+        )
+        code, _, err = self.run_cli(
+            ["doctor", "--root", str(crit_proj), "--scope", "project", "--state-dir", str(self.tmp / "exit-c")]
+        )
+        self.assertEqual(code, 3, err)
+
+    def test_scan_no_write_leaves_no_state_files(self) -> None:
+        project = self.make_project("nw3", "app", git=True)
+        state = self.tmp / "nw3-state"
+        expected = {"scan": 0, "doctor": 2, "score": 0}  # doctor: fake .git -> git-unavailable HIGH
+        for command in ("scan", "doctor", "score"):
+            code, _, err = self.run_cli(
+                [command, "--no-write", "--root", str(project), "--scope", "project", "--state-dir", str(state)]
+            )
+            self.assertEqual(code, expected[command], f"{command}: {err}")
+        for name in ("registry.json", "findings.json", "metrics.jsonl"):
+            self.assertFalse((state / name).exists(), name)
+
+    def test_next_actions_follow_actual_findings(self) -> None:
+        healthy = next_actions([])
+        self.assertEqual(len(healthy), 1)
+        self.assertIn("No open findings", healthy[0])
+        self.assertIn("guster score", healthy[0])
+
+        def finding(rule, severity):
+            return {
+                "rule": rule,
+                "severity": severity,
+                "title": "t",
+                "path": "p",
+                "message": "m",
+                "suggestion": "s",
+            }
+
+        actions = next_actions(
+            [
+                finding("secret-in-git", "critical"),
+                finding("broken-pointer", "high"),
+                finding("stale-state", "medium"),
+                finding("out-of-scope", "info"),
+            ]
+        )
+        joined = "\n".join(actions)
+        self.assertIn("critical", joined)
+        self.assertIn("secret-in-git", joined)
+        self.assertIn("broken-pointer", joined)
+        self.assertIn("stale-state", joined)
+        self.assertIn("plan findings", joined)
+        self.assertNotIn("out-of-scope", joined)
+
+        report = render_report(
+            {"summary": {}},
+            {"findings": [], "waived": [], "stats": {}},
+            {"metrics": {}, "scores": {}, "raw": {}, "dims": [], "unscored_dims": []},
+        )
+        self.assertIn("No findings.", report)
+        self.assertIn("No open findings", report)
+        self.assertNotIn("Fix critical findings first", report)
+
+    def test_load_plan_errors_carry_the_expected_schema(self) -> None:
+        def load(text):
+            path = self.tmp / "plan.json"
+            path.write_text(text, encoding="utf-8")
+            return load_plan(path)
+
+        with self.assertRaises(ValueError) as ctx:
+            load("{}")
+        message = str(ctx.exception)
+        self.assertIn("unsupported plan version: None", message)
+        self.assertIn('"version": 1', message)
+        self.assertIn('"operations"', message)
+
+        with self.assertRaises(ValueError) as ctx:
+            load('{"version": 2}')
+        self.assertIn("unsupported plan version: 2", str(ctx.exception))
+
+        with self.assertRaises(ValueError) as ctx:
+            load('{"version": 1}')
+        message = str(ctx.exception)
+        self.assertIn("operations", message)
+        self.assertIn("kind", message)
+
+        with self.assertRaises(ValueError) as ctx:
+            load("[]")
+        self.assertIn("must be a JSON object", str(ctx.exception))
+
+    def test_moved_pointer_carries_a_freshness_date(self) -> None:
+        src = self.tmp / "mv" / "note.md"
+        write(src, "# Note\n")
+        dst = self.tmp / "mv-dest" / "note.md"
+        plan = plan_move(src, dst)
+        content = plan["operations"][1]["pointer"]["content"]
+        self.assertIn("verified_at: ", content)
+        declared = extract_verified_date(content)
+        self.assertRegex(declared, r"^\d{4}-\d{2}-\d{2}$")
+
+    def test_plan_ids_and_hub_config_backups_survive_the_same_second(self) -> None:
+        from guster.planner import new_plan_id
+
+        ids = {new_plan_id("same title") for _ in range(5)}
+        self.assertEqual(len(ids), 5)
+
+        hub = self.tmp / "u-hub"
+        hub_state = self.tmp / "u-state"
+        init_hub(hub, hub_state, yes=True, dry_run=False)
+        attach_hub(hub_state, hub)
+        attach_hub(hub_state, hub)
+        backups = list((hub_state / "backups").glob("hub-config-*.json"))
+        self.assertEqual(len(backups), 2)
+
+    def test_plan_mid_failure_rolls_back_written_ops(self) -> None:
+        state = self.tmp / "rb-state"
+        state.mkdir(parents=True)
+        target = self.tmp / "rb" / "conflicted.md"
+        write(target, "orig\n")
+        src = self.tmp / "rb" / "src.md"
+        write(src, "data\n")
+        plan = {
+            "version": 1,
+            "id": "rb",
+            "created_at": "",
+            "title": "t",
+            "notes": "",
+            "operations": [
+                {"kind": "write", "path": str(target), "content": "new\n"},
+                # dst.parent is the file written above -> mkdir fails mid-run
+                {"kind": "move", "src": str(src), "dst": str(target / "child" / "m.md")},
+            ],
+        }
+        with self.assertRaises(ApplyError) as ctx:
+            apply_plan(plan, state, dry_run=False, yes=True)
+        self.assertIn("rolled back", str(ctx.exception))
+        self.assertEqual(target.read_text(encoding="utf-8"), "orig\n")
+        self.assertTrue(src.is_file())
+        self.assertFalse((target / "child").exists())
+
+    def test_rollback_failure_surfaces_both_errors(self) -> None:
+        state = self.tmp / "rb2-state"
+        state.mkdir(parents=True)
+        target = self.tmp / "rb2" / "conflicted.md"
+        write(target, "orig\n")
+        src = self.tmp / "rb2" / "src.md"
+        write(src, "data\n")
+        plan = {
+            "version": 1,
+            "id": "rb2",
+            "created_at": "",
+            "title": "t",
+            "notes": "",
+            "operations": [
+                {"kind": "write", "path": str(target), "content": "new\n"},
+                {"kind": "move", "src": str(src), "dst": str(target / "child" / "m.md")},
+            ],
+        }
+        with mock.patch("guster.executor.rollback", side_effect=RuntimeError("undo broken")):
+            with self.assertRaises(ApplyError) as ctx:
+                apply_plan(plan, state, dry_run=False, yes=True)
+        message = str(ctx.exception)
+        self.assertIn("apply failed", message)
+        self.assertIn("rollback also failed", message)
+        self.assertIn("undo broken", message)
+        self.assertIsNotNone(ctx.exception.__cause__)
+
+    def test_backups_retention_keeps_the_newest_ten(self) -> None:
+        import time
+
+        state = self.tmp / "bk-state"
+        backups = state / "backups"
+        backups.mkdir(parents=True)
+        for index in range(12):
+            item = backups / f"plan-{index:02d}"
+            item.mkdir()
+            (item / "f.txt").write_text("x", encoding="utf-8")
+            stamp = time.time() - (100 - index)
+            os.utime(item, (stamp, stamp))
+        (backups / "hub-config-abc123.json").write_text("{}", encoding="utf-8")
+        plan = {
+            "version": 1,
+            "id": "bk",
+            "created_at": "",
+            "title": "t",
+            "notes": "",
+            "operations": [{"kind": "write", "path": str(self.tmp / "bk-out.md"), "content": "x"}],
+        }
+        result = apply_plan(plan, state, dry_run=False, yes=True)
+        dirs = {item.name for item in backups.iterdir() if item.is_dir()}
+        self.assertEqual(len(dirs), 10)
+        self.assertIn("plan-11", dirs)
+        self.assertIn("bk", dirs)
+        self.assertNotIn("plan-00", dirs)
+        self.assertNotIn("plan-02", dirs)
+        self.assertTrue((backups / "hub-config-abc123.json").is_file())
+        self.assertEqual(len(result["pruned_backups"]), 3)
+
+    def test_credential_registry_parse_warnings_and_labels(self) -> None:
+        from guster.discover import scan_credential_registry
+
+        registry = self.home / ".agents" / "credentials" / "registry.md"
+        write(
+            registry,
+            "# Registry\n"
+            "\n"
+            "| ID | scope | site | account | kind | locations | keys |\n"
+            "|---|---|---|---|---|---|---|\n"
+            "| a1 | company | example.com | me | token | ~/.agents/credentials/a1 | k1 |\n"
+            "| bad | personal | only-three |\n",
+        )
+        data = scan_credential_registry(self.home)
+        self.assertEqual(len(data["entries"]), 1)
+        self.assertEqual(data["entries"][0]["id"], "a1")
+        self.assertEqual(len(data["parse_warnings"]), 1)
+        self.assertIn("line 6", data["parse_warnings"][0])
+        self.assertIn("got 3", data["parse_warnings"][0])
+
+        ws = self.tmp / "cred-ws"
+        self.make_project("cred-ws", "app", git=True)
+        state = self.tmp / "cred-state"
+        state.mkdir(parents=True)
+        (state / "config.json").write_text(
+            json.dumps({"version": 1, "roots": [str(ws)]}), encoding="utf-8"
+        )
+        code, out, err = self.run_cli(["credentials", "--state-dir", str(state)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("company 公司（1）", out)
+        self.assertIn("warning: line 6", out)
+
+    def test_age_days_unknown_when_stat_fails(self) -> None:
+        from guster.util import age_days
+
+        gone = self.tmp / "vanished.md"
+        with mock.patch.object(Path, "stat", side_effect=OSError("gone")):
+            self.assertIsNone(age_days(gone))
 
 
 if __name__ == "__main__":

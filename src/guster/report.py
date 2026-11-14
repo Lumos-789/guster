@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from . import __version__
 from .util import human_bytes, now_iso
@@ -15,6 +15,75 @@ SEVERITY_LABEL = {
     "low": "LOW",
     "info": "INFO",
 }
+RULE_ACTION_HINTS = {
+    "secret-in-git": "rotate the exposed credential, then remove it from the git index/history",
+    "secret-inline": "replace inline tokens with environment references and rotate them",
+    "secret-outside-root": "register or move unregistered credential files into the canonical root",
+    "secret-undeclared": "register credential files in ~/.agents/credentials/registry.md",
+    "secret-missing": "rotate or drop stale credential registry rows",
+    "broken-pointer": "fix the pointer path or replace it with a when-to-read pointer (`guster link` lists them)",
+    "naked-pointer": "wrap naked paths in a link or inline code (CTX-03)",
+    "misplaced-artifact": "move task bundles under a standard slot (`guster plan move`)",
+    "stale-state": "refresh verified_at on state documents or archive them",
+    "orphan-knowledge": "index knowledge files in their README, or delete them",
+    "duplicate-canonical": "keep one canonical home and turn the rest into pointers",
+    "skill-budget": "trim skill descriptions to one trigger sentence",
+    "skill-copy-drift": "make drifted skill copies byte-identical",
+    "resident-budget": "demote resident detail into knowledge or skills",
+    "registry-drift": "reconcile the hub registry rows with scanned projects (CTX-10)",
+    "hub-manifest-missing": "point the hub config at a real hub (`guster hub init`)",
+    "note-header-malformed": "fix note front-matter (type key + machine-readable date)",
+    "git-unavailable": "fix git access for the failing repositories",
+    "tmp-overdue": "archive or delete overdue files in .agents/tmp",
+    "governance-overlap": "reduce competing frameworks to one primary document",
+    "host-manifest-drift": "synchronize plugin manifest versions",
+}
+
+
+def next_actions(findings: Sequence[Dict[str, Any]]) -> List[str]:
+    """Actions derived from the findings that actually fired; an empty list
+    keeps the baseline ritual instead of naming problems that do not exist."""
+    if not findings:
+        return [
+            "No open findings — run `guster score` to record the baseline, and `guster check` after context edits."
+        ]
+    counts: Dict[str, int] = {}
+    for item in findings:
+        rule = str(item.get("rule") or "")
+        if rule == "out-of-scope":
+            continue
+        counts[rule] = counts.get(rule, 0) + 1
+    actions: List[str] = []
+    critical_rules = sorted(
+        {
+            str(item.get("rule") or "")
+            for item in findings
+            if item.get("severity") == "critical" and item.get("rule") != "out-of-scope"
+        }
+    )
+    if critical_rules:
+        actions.append(
+            f"Fix the critical finding(s) first ({', '.join(critical_rules)}); "
+            "rotate any exposed credential before further edits."
+        )
+    seen: Set[str] = set()
+    for item in findings:  # findings arrive sorted by severity
+        rule = str(item.get("rule") or "")
+        if rule in seen or rule == "out-of-scope":
+            continue
+        seen.add(rule)
+        hint = RULE_ACTION_HINTS.get(rule)
+        if hint is None:
+            continue
+        actions.append(f"`{rule}` × {counts[rule]}: {hint}.")
+        if len(actions) >= 5:
+            break
+    actions.append(
+        "Turn the rest into a checklist with `guster plan findings`; structural changes go "
+        "through `guster plan move`/`guster plan init` and `guster apply <plan> --yes`."
+    )
+    actions.append("Re-run `guster score` after fixes and compare the trend.")
+    return actions
 
 
 def render_report(
@@ -166,7 +235,7 @@ def render_report(
         lines.append("")
     if raw.get("knowledge_unhashed", 0):
         lines.append(
-            f"_Knowledge files above the hash limit, excluded from single-source checks: "
+            f"_Knowledge files excluded from single-source checks (above the hash limit or unreadable): "
             f"{raw.get('knowledge_unhashed')}._"
         )
         lines.append("")
@@ -219,11 +288,8 @@ def render_report(
         lines.append("")
     lines.append("## Next Actions")
     lines.append("")
-    lines.append("1. Fix critical findings first: credential in git, broken resident pointer, duplicate canonical source.")
-    lines.append("2. Run `guster plan findings` to turn the remaining findings into a review checklist.")
-    lines.append("3. Run `guster plan move ...` or `guster plan init ...` for structural changes.")
-    lines.append("4. Apply with `guster apply <plan> --yes` only after reviewing the plan.")
-    lines.append("5. Re-run `guster score` and compare the trend.")
+    for index, action in enumerate(next_actions(findings), start=1):
+        lines.append(f"{index}. {action}")
     lines.append("")
     return "\n".join(lines)
 

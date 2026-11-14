@@ -8,7 +8,7 @@ from . import __version__
 from .executor import apply_plan
 from .layout import DEFAULT_PATHS, load_manifest, resolve_hub_layout, validate_layout_value
 from .planner import build_plan, op_mkdir, op_write, save_plan
-from .util import is_indexed, load_json, now_iso, read_text, save_json, today_iso
+from .util import is_indexed, load_json, now_iso, read_text, save_json, today_iso, unique_suffix
 
 
 def default_hub_path(home: Path) -> Path:
@@ -225,7 +225,7 @@ def attach_hub(state_dir: Path, target: Path) -> Dict[str, Any]:
         backup_dir = state_dir / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = re.sub(r"[^0-9A-Za-z]", "", now_iso())
-        backup = backup_dir / f"hub-config-{stamp}.json"
+        backup = backup_dir / f"hub-config-{stamp}-{unique_suffix()}.json"
         backup.write_bytes(config_path.read_bytes())
     config.setdefault("version", 1)
     config["hub"] = str(hub)

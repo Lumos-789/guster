@@ -4,12 +4,20 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from .util import now_iso, save_json, slugify
+from .util import now_iso, save_json, slugify, today_iso, unique_suffix
+
+
+PLAN_SCHEMA_HINT = (
+    '{"version": 1, "operations": [{"kind": "mkdir", "path": "..."}, '
+    '{"kind": "move", "src": "...", "dst": "..."}, '
+    '{"kind": "write", "path": "...", "content": "..."}, '
+    '{"kind": "manual", "path": "...", "action": "...", "reason": "..."}]}'
+)
 
 
 def new_plan_id(title: str) -> str:
     stamp = now_iso().replace(":", "").replace("-", "").replace("+", "p")
-    return f"{stamp}-{slugify(title)[:40]}"
+    return f"{stamp}-{slugify(title)[:40]}-{unique_suffix()}"
 
 
 def build_plan(title: str, operations: Sequence[Dict[str, Any]], notes: Optional[str] = None) -> Dict[str, Any]:
@@ -61,7 +69,10 @@ def plan_move(src: Path, dst: Path) -> Dict[str, Any]:
             dst,
             pointer={
                 "path": str(src.parent / f"{src.name}.moved.md"),
-                "content": f"# Moved\n\nThis path moved to `{dst}`.\n",
+                "content": (
+                    f"# Moved\n\nThis path moved to `{dst}`.\n\n"
+                    f"verified_at: {today_iso()}\n"
+                ),
             },
         ),
     ]
@@ -167,7 +178,13 @@ def load_plan(path: Path) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"plan must be a JSON object: {path}")
     if data.get("version") != 1:
-        raise ValueError(f"unsupported plan version: {data.get('version')}")
+        raise ValueError(
+            f"unsupported plan version: {data.get('version')!r} (expected the integer 1); "
+            f"a plan is shaped {PLAN_SCHEMA_HINT}"
+        )
     if not isinstance(data.get("operations"), list):
-        raise ValueError("plan has no operations")
+        raise ValueError(
+            "plan has no operations list; expected an 'operations' array of operation "
+            f"objects with a 'kind' of mkdir/move/write/manual, e.g. {PLAN_SCHEMA_HINT}"
+        )
     return data
