@@ -1434,6 +1434,81 @@ class StructuredNoteHeaderTests(unittest.TestCase):
             [f for f in policy["findings"] if f["rule"] == "note-header-malformed"]
         )
 
+    def test_parse_note_header_accepts_metadata_keys(self) -> None:
+        from guster.util import parse_note_header
+
+        header = parse_note_header(
+            "---\n"
+            "type: pointer\n"
+            "name: deploy-runbook\n"
+            "description: How this repo ships to production\n"
+            "superseded_by: notes/deploy-v1.md\n"
+            "updated: 2026-11-14\n"
+            "---\n"
+        )
+        self.assertEqual(header["name"], "deploy-runbook")
+        self.assertEqual(header["description"], "How this repo ships to production")
+        self.assertEqual(header["superseded_by"], "notes/deploy-v1.md")
+        self.assertEqual(note_header_date(header), "2026-11-14")
+
+    def test_metadata_keys_note_passes_clean(self) -> None:
+        self._note(
+            "meta.md",
+            "---\n"
+            "type: pointer\n"
+            "name: deploy-runbook\n"
+            "description: How this repo ships to production\n"
+            "updated: 2026-11-14\n"
+            "superseded_by: notes/deploy-v1.md\n"
+            "---\n\n# Meta\n\nTruth: [a note](a.md).\n",
+        )
+        write(
+            self.fx.hub / "knowledge" / "README.md",
+            "# Knowledge\n\n| a |\n|---|\n| `general/a.md` |\n"
+            "| `general/meta.md` |\n",
+        )
+        policy = self._policy()
+        self.assertGreaterEqual(policy["stats"]["note_headers_total"], 1)
+        self.assertFalse(
+            [f for f in policy["findings"] if "meta.md" in f.get("path", "")]
+        )
+
+    def test_superseded_by_stays_out_of_pointer_scan(self) -> None:
+        self._note(
+            "superseded.md",
+            "---\n"
+            "type: pointer\n"
+            "updated: 2026-11-14\n"
+            "superseded_by: general/deploy-v1.md\n"
+            "---\n\n# Superseded\n\nTruth: [a note](a.md).\n",
+        )
+        policy = self._policy()
+        hits = [
+            f for f in policy["findings"]
+            if f["rule"] in {"broken-pointer", "naked-pointer"}
+            and "superseded.md" in f.get("path", "")
+        ]
+        self.assertFalse(hits)
+
+    def test_backtick_superseded_by_stays_out_of_pointer_scan(self) -> None:
+        # Backticks make the value a code span the scan would otherwise pick
+        # up; front-matter is metadata, so the spelling must not matter.
+        self._note(
+            "superseded.md",
+            "---\n"
+            "type: pointer\n"
+            "updated: 2026-11-14\n"
+            "superseded_by: `~/.agents/tmp/gone-deploy.md`\n"
+            "---\n\n# Superseded\n\nTruth: [a note](a.md).\n",
+        )
+        policy = self._policy()
+        hits = [
+            f for f in policy["findings"]
+            if f["rule"] in {"broken-pointer", "naked-pointer"}
+            and "superseded.md" in f.get("path", "")
+        ]
+        self.assertFalse(hits)
+
 
 
 class DeclarativeHubZoneTests(unittest.TestCase):

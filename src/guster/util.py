@@ -522,6 +522,9 @@ def note_header_date(header: Dict[str, Any]) -> Optional[str]:
 
 
 def extract_pointers(text: str) -> List[str]:
+    # A leading front-matter block is metadata, not prose (CTX-09: the body,
+    # never the header, joins the pointer scan).
+    text = _strip_frontmatter(text)
     text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
     pointers: List[str] = []
 
@@ -614,13 +617,29 @@ NAKED_POINTER_TOKEN_RE = re.compile(
 )
 
 
+def _strip_frontmatter(text: str) -> str:
+    """Body after a leading YAML front-matter block; header metadata is not prose."""
+    if not text.startswith("---"):
+        return text
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return "\n".join(lines[index + 1 :])
+    return text
+
+
 def extract_naked_pointers(text: str) -> List[str]:
     """File-shaped paths left in prose after links, code spans and code blocks are removed.
 
     Only suffix-bearing paths count: directory references in prose (a bare
     `~/some/repo`) name a place far more often than they point at a read, and
-    flagging them would drown the signal.
+    flagging them would drown the signal. A leading front-matter block is
+    metadata, not prose — a path-valued key (CTX-09 `superseded_by`) is never
+    a naked pointer.
     """
+    text = _strip_frontmatter(text)
     residual = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
     residual = re.sub(r"\[[^\]]*\]\([^)]+\)", "", residual)
     residual = re.sub(r"`[^`\n]+`", "", residual)

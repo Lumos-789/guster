@@ -8,12 +8,20 @@ that writes the document.
 
 ## Open conventions this spec follows
 
-- **AGENTS.md** (agents.md) — the tool-agnostic instruction file. Guster reads
-  `AGENTS.md` (and legacy `CLAUDE.md`) wherever a host reads them; it does not
-  invent a competing instruction format.
+- **AGENTS.md** (agents.md) — the open format for the tool-agnostic
+  instruction file. Discovery is nested: hosts collect `AGENTS.md` files
+  walking outward from the working directory and the nearest one wins. On
+  that precedence CTX-01 stacks a stricter discipline: a nested file narrows
+  the parent, never contradicts it. Guster reads `AGENTS.md` (and legacy
+  `CLAUDE.md`) wherever a host reads them and does not invent a competing
+  instruction format; a host that only knows `CLAUDE.md` is served with
+  `ln -s AGENTS.md CLAUDE.md`.
 - **llms.txt** (llmstxt.org) — index files as curated link lists. A knowledge
   index is an H1, a one-line blockquote summary, then one markdown link per
   file with a one-line description. Same shape, local files instead of URLs.
+- **YAML front-matter** — the `---`-delimited metadata block; the de-facto
+  standard Jekyll, Hugo and Gray Matter share. CTX-09 rides it rather than
+  inventing a note format.
 - **Stable rule IDs** (markdownlint) — rules are numbered, cited by findings
   and waivers, and only change meaning on a spec_version bump.
 
@@ -29,7 +37,7 @@ that writes the document.
 | CTX-06 | One home per fact. Same topic, same filename stem; the second home becomes a pointer to the first. Copies are either byte-identical or a mistake. | `duplicate-canonical`, `skill-copy-drift` |
 | CTX-07 | Skill frontmatter carries `name` and `description` only; one trigger sentence, ≤500 chars each, ≤6,000 chars across the library. | `skill-budget` |
 | CTX-08 | Credentials appear by reference — a path in the registry under the canonical root — never as a value in a document, a config or git. | `secret-in-git`, `secret-outside-root`, `secret-inline`, `secret-undeclared`, `secret-missing` |
-| CTX-09 | A knowledge note may carry YAML front-matter following the Obsidian properties convention (the interchange format Foam/Quartz/Logseq also accept). The header is opt-in: it is machine-checked only when it declares `type:`. A checked header must parse and carry a machine-readable date (`updated`/`date`/`lastmod`/`created` as YYYY-MM-DD), and the note's body then joins the CTX-03 pointer scan — truth sources go in the body as links, never as invented header keys. | `note-header-malformed`, `broken-pointer`, `naked-pointer` |
+| CTX-09 | A knowledge note may carry YAML front-matter following the Obsidian properties convention (the interchange format Foam/Quartz/Logseq also accept). The header is opt-in: it is machine-checked only when it declares `type:`. A checked header must parse and carry a machine-readable date (`updated`/`date`/`lastmod`/`created` as YYYY-MM-DD), and the note's body then joins the CTX-03 pointer scan — truth sources go in the body as links, never as invented header keys. Optional keys: `name` and `description` state what the note is (the one-fact-per-file shape inspired by the Claude Code memory tool), and `superseded_by` names the path or stem of the note that replaced this one; that key is metadata about the note, not a truth source, so it never joins the pointer scan and never raises a finding. | `note-header-malformed`, `broken-pointer`, `naked-pointer` |
 | CTX-10 | The hub's project registry (`projects/_registry.md`) is a machine-readable table. The header row names the columns; whichever column header contains `path` or `路径` is the path column, and each row's cell there holds one project location — `~/...`, absolute, or relative to the hub root. The slug column (first column) never counts as a path. Remote forms (`host:/path`, URLs) and placeholder cells (`-`, `—`) are skipped, not resolved. | `registry-drift` |
 
 ### CTX-10 in detail
@@ -92,8 +100,10 @@ When creating or moving a context asset:
 4. A note that summarizes knowledge whose truth lives elsewhere (a pointer
    card) opts into CTX-09: standard front-matter (`type: pointer`, a date
    key, `tags` if useful) plus a truth section of ordinary markdown links.
-   Volatile values (latest numbers, current picks) stay out of the card and
-   are read from the truth sources instead.
+   `name` and `description` are optional metadata; so is `superseded_by`,
+   which marks the note a better one replaced — the chain is for readers;
+   the scanner never resolves it. Volatile values (latest numbers, current
+   picks) stay out of the card and are read from the truth sources instead.
 
 ## Versioning
 

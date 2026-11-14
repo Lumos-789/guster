@@ -177,9 +177,10 @@ def load_plan(path: Path) -> Dict[str, Any]:
         raise ValueError(f"invalid plan JSON {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"plan must be a JSON object: {path}")
-    if data.get("version") != 1:
+    version = data.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
         raise ValueError(
-            f"unsupported plan version: {data.get('version')!r} (expected the integer 1); "
+            f"unsupported plan version: {version!r} (expected the integer 1); "
             f"a plan is shaped {PLAN_SCHEMA_HINT}"
         )
     if not isinstance(data.get("operations"), list):

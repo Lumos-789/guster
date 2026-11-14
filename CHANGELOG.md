@@ -2,6 +2,38 @@
 
 Notable changes. Earlier history is in `git log`.
 
+## 0.9.1 — 2026-11-14
+
+The format-spec release: the context format contract is now externally
+deliverable — schema-checked in the editor, sourced to open conventions, and
+stated in attributable vocabulary.
+
+- **JSON Schema contracts**: `schemas/hub.schema.json` and
+  `schemas/plan.schema.json` (draft 2020-12, derived from the code that
+  reads and writes each format) pin the `hub.yaml` manifest and the plan
+  JSON. The scaffolded `hub.yaml` ships a yaml-language-server modeline on
+  its first line, so the VS Code YAML extension validates it with zero
+  configuration, and an agent hand-writing a batch plan has the exact field
+  contract to check against before the `apply` dry-run. `tests/test_schemas.py`
+  keeps both contracts honest with a stdlib-only mini validator.
+- **CTX-09 optional keys**: a note header may carry `name` and `description`
+  (the one-fact-per-file shape inspired by the Claude Code memory tool) and
+  `superseded_by`, the path or stem of the note that replaced this one — pure
+  metadata, never part of the pointer scan, no new finding. The naked-pointer
+  scan now skips front-matter, so `superseded_by` values are not misread as
+  naked pointers. `spec_version` stays 1.
+- **Open conventions, sourced**: the spec's conventions section now states
+  AGENTS.md as an open format (nearest-wins nested discovery, the same
+  narrow-never-contradict discipline as CTX-01, plus the
+  `ln -s AGENTS.md CLAUDE.md` recipe) and YAML front-matter as the de-facto
+  standard Jekyll, Hugo and Gray Matter share.
+- **README positioning**: both READMEs gain a schema-contracts chapter, the
+  conventions sourcing, a compact prior-art section (Cline Memory Bank,
+  Claude Code memory tool, Letta, Mem0, Zep — inspired-by wording
+  throughout), and the Anthropic vocabulary (structured note-taking,
+  'just in time' context, context rot, compaction); the project tree lists
+  `schemas/`. English and Chinese stay semantically aligned.
+
 ## 0.9.0 — 2026-11-14
 
 The "installed and fully usable" release: the new-user journey is closed end

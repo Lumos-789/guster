@@ -4,6 +4,17 @@ Guster is a distributable agent plugin that audits and evolves the context of a 
 
 It is the **control plane** for agent context. A Guster Hub is the optional **data plane**: the local repository that holds project cards, knowledge, tools and reports. The plugin does not replace the hub; it discovers it, validates it, and helps keep it coherent.
 
+## Prior art
+
+The ideas are borrowed with credit; the implementation is guster's own.
+
+- **Cline Memory Bank** — inspired the layered responsibilities of the files (project cards, knowledge, state) and the banking rhythm of refreshing them per working session; both banks are plain markdown.
+- **Claude Code memory tool** — inspired the one-fact-per-file note shape and front-matter metadata; guster's note headers spell the keys `name`, `description`, `type`.
+- **Letta (MemGPT)** — inspired the label/limit abstraction of memory blocks behind guster's resident budgets.
+- **Mem0** — inspired the decide-first stance (ADD/UPDATE/DELETE/NOOP, soft invalidation by marking instead of deleting) behind plan/apply/waiver; a waiver greens the gate, not the score.
+- **Zep/Graphiti** — inspired the dual-timeline fact model (`valid_at`/`invalid_at`); `superseded_by` is its one-file simplification.
+- The framing vocabulary — structured note-taking (agentic memory), 'just in time' context, context rot, compaction — is inspired by Anthropic's "Effective context engineering for AI agents" (2025-09-29).
+
 ## What it does
 
 - **Discovers** Git roots, `AGENTS.md` / `CLAUDE.md`, `.agents/` directories, skills, tools, knowledge, state, evidence and credential locations.
@@ -175,9 +186,14 @@ dates — so they only see documents that keep the format contract. The contract
 is written down and versioned: [`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)
 (spec_version 1, rules `CTX-01..10` — `CTX-09` structured note header, `CTX-10`
 machine-readable project registry — markdownlint-style stable IDs). It follows
-open conventions instead of inventing new ones: `AGENTS.md` for instruction
-files ([agents.md](https://agents.md)), llms.txt-shaped link indexes
-([llmstxt.org](https://llmstxt.org)), stable rule IDs like markdownlint.
+open conventions instead of inventing new ones: the open `AGENTS.md` format
+([agents.md](https://agents.md)) for instruction files — discovery is nested
+and nearest-wins, the same discipline as CTX-01 (a nested `AGENTS.md` narrows
+the parent, never contradicts it), and a host that only reads `CLAUDE.md` is
+served with `ln -s AGENTS.md CLAUDE.md` — llms.txt-shaped link indexes
+([llmstxt.org](https://llmstxt.org)), YAML front-matter for note headers (the
+de-facto standard Jekyll, Hugo and Gray Matter share), and stable rule IDs
+like markdownlint.
 
 A document that ignores the contract is not scored lower — it is invisible: a
 naked path in prose never reaches the pointer check, a date written as "last
@@ -185,6 +201,24 @@ week" falls back to git, an index without filenames counts as missing. Since
 0.7.0 the `naked-pointer` finding closes that gap from the other side: file
 paths left outside a link or code span in an instruction or index document are
 reported, so the unwritable form is also the flagged form.
+
+## Schema contracts
+
+The two machine-readable formats carry JSON Schema (draft 2020-12) contracts,
+derived from the code that reads and writes them:
+
+- [`schemas/hub.schema.json`](schemas/hub.schema.json) — `hub.yaml`. The
+  scaffolded manifest ships with a yaml-language-server modeline on its first
+  line, so the VS Code YAML extension (or any editor speaking
+  yaml-language-server) validates `hub.yaml` with zero configuration:
+
+  ```yaml
+  # yaml-language-server: $schema=https://raw.githubusercontent.com/Lumos-789/guster/main/schemas/hub.schema.json
+  ```
+
+- [`schemas/plan.schema.json`](schemas/plan.schema.json) — the plan JSON that
+  `plan` writes and `apply` executes. An agent hand-writing a batch plan has
+  the exact field contract to check against before the `apply` dry-run.
 
 ## Scopes
 
@@ -297,6 +331,7 @@ skills/guster-hub/    hub bootstrap and validation skill
 src/guster/           Python CLI and policy engine
 bin/guster            executable wrapper
 templates/hub/        lite Hub scaffold (the only shipped template set)
+schemas/              JSON Schema contracts for hub.yaml and plan JSON
 tests/                fixture and plugin tests
 ```
 

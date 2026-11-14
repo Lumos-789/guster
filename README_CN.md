@@ -4,6 +4,17 @@ Guster 是一个可分发的 Agent 插件，用来审计和演进整台机器的
 
 它是上下文的**控制面**。Guster Hub 是可选的**数据面**：承载项目卡、知识、工具和报告的本地仓库。插件不替代 Hub，而是发现它、校验它，并帮助它保持自洽。
 
+## 理念来源
+
+理念皆有出处，实现是 guster 自己的：
+
+- **Cline Memory Bank** —— 启发了分层文件的职责划分（项目卡、知识、状态）与每个工作会话刷新一次的 banking 节奏；两边的记忆库都是纯 markdown。
+- **Claude Code memory tool** —— 启发了「一事实一文件」的笔记形状与 front-matter 元数据；guster 的笔记头把这些键拼写为 `name`、`description`、`type`。
+- **Letta (MemGPT)** —— 启发了 memory block 的 label/limit 抽象，guster 的常驻预算背后正是它。
+- **Mem0** —— 启发了先裁决再动手的语义（ADD/UPDATE/DELETE/NOOP、以标记代删除的软失效），落到 plan/apply/waiver；waiver 只让门禁变绿，不改分数。
+- **Zep/Graphiti** —— 启发了双时间轴事实建模（`valid_at`/`invalid_at`），`superseded_by` 是它的文件化简化。
+- 定位词汇——structured note-taking（agentic memory）、'just in time' context、context rot、compaction——借鉴自 Anthropic《Effective context engineering for AI agents》（2025-09-29）。
+
 ## 它做什么
 
 - **发现** Git 根、`AGENTS.md` / `CLAUDE.md`、`.agents/`、Skill、工具、知识、状态、证据和凭据位置。
@@ -152,9 +163,21 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 
 ## 上下文格式规范
 
-指标全是静态的——文件名主干、内容哈希、路径解析、git 日期——所以只有守住格式契约的文档才被测得到。契约本身已写成文档并版本化：[`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)（spec_version 1，规则 `CTX-01..10`——`CTX-09` 结构化条目头、`CTX-10` 机器可读项目登记表，markdownlint 式稳定编号）。它遵循开源惯例而不是另造一套：指令文件用 `AGENTS.md`（[agents.md](https://agents.md) 标准）、索引文件用 llms.txt 形态的链接列表（[llmstxt.org](https://llmstxt.org)）、规则编号学 markdownlint。
+指标全是静态的——文件名主干、内容哈希、路径解析、git 日期——所以只有守住格式契约的文档才被测得到。契约本身已写成文档并版本化：[`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)（spec_version 1，规则 `CTX-01..10`——`CTX-09` 结构化条目头、`CTX-10` 机器可读项目登记表，markdownlint 式稳定编号）。它遵循开源惯例而不是另造一套：指令文件用 `AGENTS.md` 开放格式（[agents.md](https://agents.md)）——发现规则是嵌套 nearest-wins，与 CTX-01（嵌套只收窄、绝不矛盾）是同一条纪律，只认 `CLAUDE.md` 的宿主用 `ln -s AGENTS.md CLAUDE.md` 即可伺候——索引文件用 llms.txt 形态的链接列表（[llmstxt.org](https://llmstxt.org)）、笔记头用 YAML front-matter（Jekyll/Hugo/Gray Matter 共同坐实的业界事实标准）、规则编号学 markdownlint。
 
 不守契约的文档不是被扣分——而是彻底隐身：正文里裸写的路径永远到不了指针检查、「上周更新」落到 git 时间兜底、索引里没有文件名等于没索引。0.7.0 起 `naked-pointer` finding 从另一侧堵上这个缺口：指令文档/索引页里留在链接和代码记号之外的文件路径会被直接报告，写不规范的形态同时也是会被标记的形态。
+
+## Schema 契约
+
+两份机器可读格式都带 JSON Schema（draft 2020-12）契约，字段全部从读写它们的代码实况推导：
+
+- [`schemas/hub.schema.json`](schemas/hub.schema.json) —— `hub.yaml` 清单。脚手架生成的 manifest 首行自带 yaml-language-server modeline，VS Code YAML 扩展（或任何接 yaml-language-server 的编辑器）零配置即可校验：
+
+  ```yaml
+  # yaml-language-server: $schema=https://raw.githubusercontent.com/Lumos-789/guster/main/schemas/hub.schema.json
+  ```
+
+- [`schemas/plan.schema.json`](schemas/plan.schema.json) —— `plan` 产出、`apply` 执行的 plan JSON。agent 手搓批量 plan 时，它就是完整的字段契约，`apply` dry-run 前先对照自查。
 
 ## 层级
 
@@ -248,6 +271,7 @@ skills/guster-hub/    Hub 初始化与校验 skill
 src/guster/           Python CLI 与策略引擎
 bin/guster            可执行入口
 templates/hub/        Lite Hub 脚手架（唯一随包发布的模板集）
+schemas/              hub.yaml 与 plan JSON 的 JSON Schema 契约
 tests/                fixture 与插件测试
 ```
 

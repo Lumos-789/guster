@@ -147,7 +147,11 @@ machine-verifiable pointers, machine-readable dates, the six `.agents/` slots,
 one home per fact, skill metadata budgets, credentials by reference, and the
 machine-readable project registry table. When writing or moving a context
 asset, follow the spec; when a doctor finding fires, it names the rule that
-was broken.
+was broken. CTX-09 note headers also accept optional `name` and `description`
+keys (the one-fact-per-file shape inspired by the Claude Code memory tool) and
+`superseded_by` (metadata only; `superseded_by` never joins the pointer scan),
+and the plugin's `schemas/` directory carries JSON Schema
+(draft 2020-12) contracts for `hub.yaml` and the plan JSON.
 
 ## New project onboarding
 
