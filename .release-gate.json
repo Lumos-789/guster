@@ -1,0 +1,19 @@
+{
+  "allow": [
+    {
+      "rule": "user-path",
+      "path": "README.md",
+      "reason": "Documented config.json example uses a generic placeholder absolute home (roots must be absolute); neutral example convention, not any real machine's layout."
+    },
+    {
+      "rule": "user-path",
+      "path": "README_CN.md",
+      "reason": "Documented config.json example uses the same generic placeholder absolute home as README.md; neutral example convention, not any real machine's layout."
+    },
+    {
+      "rule": "user-path",
+      "path": "tests/test_core.py",
+      "reason": "Fixtures use placeholder absolute homes and a macOS-standard shared directory inside a remote host:/path registry row; no real username, hostname detail or machine topology is recoverable."
+    }
+  ]
+}
