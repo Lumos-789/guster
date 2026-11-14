@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import __version__
-from .discover import ScanConfig, default_hub, default_roots, scan
+from .discover import ScanConfig, count_zone_tools, default_roots, scan
 from .executor import ApplyError, apply_plan, init_home
 from .hub import attach_hub, default_hub_path, init_hub, validate_hub
 from .metrics import compute_metrics, metric_line
@@ -26,6 +26,77 @@ from .util import json_dumps, load_json, now_iso, save_json, write_text
 
 def default_state_dir(home: Path) -> Path:
     return home / ".agents" / "guster"
+
+
+def state_dir_from(args: argparse.Namespace) -> Path:
+    """Explicit --state-dir or the machine default; used by commands that do
+    not need a full scan config (init/apply/plan/hub/zones)."""
+    if args.state_dir:
+        return Path(args.state_dir).expanduser()
+    return default_state_dir(Path.home())
+
+
+def load_config(config_path: Path) -> Dict[str, Any]:
+    if not config_path.is_file():
+        return {}
+    try:
+        local = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read Guster config {config_path}: {exc}") from exc
+    if not isinstance(local, dict):
+        raise ValueError(f"Guster config must be a JSON object: {config_path}")
+    return local
+
+
+def resolve_root(root: Path) -> Path:
+    if not root.exists():
+        raise ValueError(f"workspace root does not exist: {root.resolve()}")
+    if not root.is_dir():
+        raise ValueError(f"workspace root is not a directory: {root.resolve()}")
+    return root
+
+
+def parse_roots(raw: Any, config_path: Path) -> List[Path]:
+    """Config roots must be existing absolute directories; one bad entry stops
+    the run instead of being silently reinterpreted (a bare string is a type
+    error, never a list of characters)."""
+    if not isinstance(raw, list):
+        raise ValueError(
+            f"Guster config 'roots' must be a list of absolute paths, "
+            f"got {type(raw).__name__}: {config_path}"
+        )
+    if not raw:
+        raise ValueError(f"Guster config 'roots' must list at least one path: {config_path}")
+    roots: List[Path] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(
+                f"Guster config 'roots' entries must be non-empty strings: {item!r} in {config_path}"
+            )
+        path = Path(item).expanduser()
+        if not path.is_absolute():
+            raise ValueError(
+                f"Guster config 'roots' entries must be absolute paths: {item!r} in {config_path}"
+            )
+        roots.append(resolve_root(path))
+    return roots
+
+
+def parse_zones(raw: Any, config_path: Path) -> List[Dict[str, str]]:
+    if not isinstance(raw, list):
+        raise ValueError(f"Guster config 'zones' must be a list: {config_path}")
+    zones: List[Dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict) or not str(item.get("path", "")).strip():
+            raise ValueError(f"zone entry needs a 'path' in {config_path}: {item!r}")
+        zone_path = Path(str(item["path"])).expanduser()
+        profile = str(item.get("profile", "light"))
+        if not zone_path.is_dir():
+            raise ValueError(f"configured zone does not exist: {zone_path.resolve()}")
+        if profile not in {"light", "full"}:
+            raise ValueError(f"zone profile must be 'light' or 'full': {profile}")
+        zones.append({"path": str(zone_path), "profile": profile})
+    return zones
 
 
 def add_common(parser: argparse.ArgumentParser) -> None:
@@ -46,41 +117,45 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
     home = Path.home()
     base_state = Path(args.state_dir).expanduser() if args.state_dir else default_state_dir(home)
     config_path = base_state / "config.json"
-    local: Any = {}
-    if config_path.is_file():
-        try:
-            local = json.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise ValueError(f"cannot read Guster config {config_path}: {exc}") from exc
-        if not isinstance(local, dict):
-            raise ValueError(f"Guster config must be a JSON object: {config_path}")
+    unconfigured = not config_path.is_file()
+    local = load_config(config_path)
 
+    hub: Optional[Path] = None
     if args.hub:
         hub = Path(args.hub).expanduser()
-    elif isinstance(local, dict) and local.get("hub"):
-        hub = Path(local["hub"]).expanduser()
-    else:
-        hub = default_hub(home)
+    elif local.get("hub"):
+        raw_hub = local["hub"]
+        if not isinstance(raw_hub, str) or not raw_hub.strip():
+            raise ValueError(f"Guster config 'hub' must be a path string: {config_path}")
+        hub = Path(raw_hub).expanduser()
+    if hub is not None:
+        if not hub.exists():
+            raise ValueError(f"hub directory does not exist: {hub.resolve()}")
+        if not hub.is_dir():
+            raise ValueError(f"hub is not a directory: {hub.resolve()}")
 
-    explicit_roots = [Path(item).expanduser() for item in args.root] if args.root else []
-    for root in explicit_roots:
-        if not root.exists():
-            raise ValueError(f"workspace root does not exist: {root.resolve()}")
-        if not root.is_dir():
-            raise ValueError(f"workspace root is not a directory: {root.resolve()}")
+    explicit_roots = [resolve_root(Path(item).expanduser()) for item in (args.root or [])]
     scope = getattr(args, "scope", "auto") or "auto"
     if scope == "auto":
         scope = "machine" if not explicit_roots else ("project" if len(explicit_roots) == 1 else "group")
     if scope in {"project", "group"} and not explicit_roots:
         raise ValueError("--scope project|group needs at least one --root")
+    auto_roots = False
     if scope == "hub":
         roots: List[Path] = []
     elif explicit_roots:
         roots = explicit_roots
-    elif isinstance(local, dict) and local.get("roots"):
-        roots = [Path(item).expanduser() for item in local["roots"]]
+    elif "roots" in local:
+        roots = parse_roots(local.get("roots"), config_path)
     else:
         roots = default_roots(home)
+        if not roots:
+            raise ValueError(
+                "no workspace roots configured and none of "
+                "~/Projects, ~/code, ~/dev, ~/src exists — "
+                "run `guster init --root <path>` to configure Guster"
+            )
+        auto_roots = True
 
     state_dir = base_state
     if not args.state_dir and (scope != "machine" or explicit_roots):
@@ -90,20 +165,7 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
         state_dir = base_state / "scoped" / hashlib.sha1(key.encode()).hexdigest()[:10]
 
     plugin_root = Path(__file__).resolve().parents[2]
-    zones: List[Dict[str, str]] = []
-    raw_zones = local.get("zones", []) if isinstance(local, dict) else []
-    if not isinstance(raw_zones, list):
-        raise ValueError(f"Guster config 'zones' must be a list: {config_path}")
-    for item in raw_zones:
-        if not isinstance(item, dict) or not str(item.get("path", "")).strip():
-            raise ValueError(f"zone entry needs a 'path' in {config_path}: {item!r}")
-        zone_path = Path(str(item["path"])).expanduser()
-        profile = str(item.get("profile", "light"))
-        if not zone_path.is_dir():
-            raise ValueError(f"configured zone does not exist: {zone_path.resolve()}")
-        if profile not in {"light", "full"}:
-            raise ValueError(f"zone profile must be 'light' or 'full': {profile}")
-        zones.append({"path": str(zone_path), "profile": profile})
+    zones = parse_zones(local.get("zones", []), config_path)
 
     return ScanConfig(
         home=home,
@@ -111,9 +173,11 @@ def build_config(args: argparse.Namespace) -> ScanConfig:
         roots=roots,
         state_dir=state_dir,
         plugin_root=plugin_root,
-        max_depth=int(local.get("scan_max_depth", 5)) if isinstance(local, dict) else 5,
+        max_depth=int(local.get("scan_max_depth", 5)),
         scope=scope,
         zones=zones,
+        unconfigured=unconfigured,
+        auto_roots=auto_roots,
     )
 
 
@@ -233,6 +297,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             "metrics": metric_result,
             "cached": cached,
             "findings": None if policy_result is None else len(policy_result["findings"]),
+            "scope": registry.get("scope"),
+            "state_dir": str(config.state_dir),
         }))
     else:
         print(render_status(registry, metric_result))
@@ -319,23 +385,60 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_plan(args: argparse.Namespace) -> int:
+def cmd_check(args: argparse.Namespace) -> int:
+    """scan -> doctor -> score --trend in one pass; the exit code carries the
+    doctor semantics (3 critical, 2 high, 0 clean)."""
     config = build_config(args)
-    ensure_state(config)
+    registry = do_scan(config, write=not args.no_write)
+    result = evaluate(registry, config)
+    policy_result = result["policy"]
+    if not args.no_write:
+        write_findings(config, policy_result)
+        append_metric(config, result["metrics"])
+    if args.json:
+        print(json_dumps({"policy": policy_result, "metrics": result["metrics"]}))
+    elif not args.quiet:
+        print(render_report(registry, policy_result, result["metrics"]))
+        path = config.state_dir / "metrics.jsonl"
+        if path.is_file():
+            lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()][-10:]
+            if lines:
+                print("")
+                print("Recent trend:")
+                for line in lines:
+                    try:
+                        item = json.loads(line)
+                        print(f"  {item.get('at')}  CHI {item.get('chi')}")
+                    except ValueError:
+                        continue
+    severities = {item["severity"] for item in policy_result["findings"]}
+    if "critical" in severities:
+        return 3
+    if "high" in severities:
+        return 2
+    return 0
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
     if args.plan_action == "findings":
+        config = build_config(args)
+        ensure_state(config)
         registry = do_scan(config, write=True)
         result = evaluate(registry, config)
         plan = plan_from_findings(result["policy"]["findings"])
+        state_dir = config.state_dir
     elif args.plan_action == "move":
         src = Path(args.source).expanduser()
         dst = Path(args.destination).expanduser()
         plan = plan_move(src, dst)
+        state_dir = state_dir_from(args)
     elif args.plan_action == "init":
         plan = plan_init_project(Path(args.project).expanduser())
+        state_dir = state_dir_from(args)
     else:
         raise SystemExit(f"unknown plan action: {args.plan_action}")
 
-    path = save_plan(config.state_dir, plan)
+    path = save_plan(state_dir, plan)
     if args.json:
         print(json_dumps(plan))
     elif not args.quiet:
@@ -356,14 +459,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
-    config = build_config(args)
-    ensure_state(config)
     if args.dry_run and args.yes:
         raise ValueError("--dry-run and --yes are mutually exclusive")
     plan = load_plan(Path(args.plan).expanduser())
     result = apply_plan(
         plan,
-        config.state_dir,
+        state_dir_from(args),
         dry_run=not args.yes,
         yes=args.yes,
     )
@@ -388,15 +489,39 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    config = build_config(args)
+    state_dir = state_dir_from(args)
     if args.project:
-        plan = plan_init_project(Path(args.project).expanduser())
-        path = save_plan(config.state_dir, plan)
-        result = apply_plan(plan, config.state_dir, dry_run=not args.yes, yes=args.yes)
+        project = Path(args.project).expanduser()
+        plan = plan_init_project(project)
+        path = save_plan(state_dir, plan)
+        result = apply_plan(plan, state_dir, dry_run=not args.yes, yes=args.yes)
         if not args.json and not args.quiet:
             print(f"plan: {path}")
+            if result.get("dry_run"):
+                missing: List[Path] = []
+                probe = project.resolve()
+                while not probe.exists() and probe != probe.parent:
+                    missing.append(probe)
+                    probe = probe.parent
+                if missing:
+                    print("  these directories do not exist yet and will be created:")
+                    for entry in sorted(missing, key=lambda item: len(item.parts)):
+                        print(f"    {entry}")
+                for index, operation in enumerate(plan.get("operations", []), start=1):
+                    kind = operation.get("kind")
+                    if kind == "mkdir":
+                        print(f"  {index}. mkdir {operation['path']}")
+                    elif kind == "write":
+                        print(f"  {index}. write {operation['path']}")
     else:
-        result = init_home(config.state_dir, yes=args.yes, dry_run=not args.yes)
+        explicit_roots = [resolve_root(Path(item).expanduser()) for item in (args.root or [])]
+        result = init_home(
+            state_dir,
+            yes=args.yes,
+            dry_run=not args.yes,
+            home=Path.home(),
+            roots=explicit_roots or None,
+        )
     if args.json:
         print(json_dumps(result))
     elif not args.quiet:
@@ -416,19 +541,33 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_hub(args: argparse.Namespace) -> int:
-    config = build_config(args)
+    state_dir = state_dir_from(args)
     action = args.hub_action
+    local = load_config(state_dir / "config.json")
+    attached: Optional[Path] = None
+    raw_hub = local.get("hub")
+    if isinstance(raw_hub, str) and raw_hub.strip():
+        attached = Path(raw_hub).expanduser()
+    if attached is None and not getattr(args, "path", None) and not getattr(args, "hub", None):
+        if action == "status":
+            if args.json:
+                print(json_dumps({"attached": False, "hub": None}))
+            elif not args.quiet:
+                print("no hub attached")
+            return 0
+        if action == "validate":
+            raise ValueError("no hub attached; pass --path <hub> to validate one")
     target = Path(
         getattr(args, "path", None)
         or getattr(args, "hub", None)
-        or config.hub
+        or attached
         or default_hub_path(Path.home())
     ).expanduser()
 
     if action == "init":
         result = init_hub(
             target,
-            config.state_dir,
+            state_dir,
             yes=args.yes,
             dry_run=not args.yes,
             name=args.name,
@@ -465,7 +604,7 @@ def cmd_hub(args: argparse.Namespace) -> int:
         return 0 if result.get("ok") else 4
 
     if action == "attach":
-        result = attach_hub(config.state_dir, target)
+        result = attach_hub(state_dir, target)
         if args.json:
             print(json_dumps(result))
         elif not args.quiet:
@@ -473,6 +612,7 @@ def cmd_hub(args: argparse.Namespace) -> int:
             print(f"  config: {result['config']}")
             if result.get("backup"):
                 print(f"  backup: {result['backup']}")
+            print("  run `guster scan` to refresh the registry with the hub")
         return 0
 
     info = validate_hub(target, strict=action == "validate")
@@ -486,19 +626,19 @@ def cmd_hub(args: argparse.Namespace) -> int:
         else:
             print(
                 "Manifest: "
-                f"{info.get('profile') or '(missing)'} "
-                f"schema={manifest.get('schema_version') or '(missing)'} "
-                f"hub={manifest.get('hub_version') or '(missing)'} "
-                f"min_guster={manifest.get('min_guster') or '(missing)'}"
+                f"{info.get('profile') or '(absent)'} "
+                f"schema={manifest.get('schema_version') or '(absent)'} "
+                f"hub={manifest.get('hub_version') or '(absent)'} "
+                f"min_guster={manifest.get('min_guster') or '(absent)'}"
             )
         print(f"Plugin: {info['plugin']}")
         paths = info.get("paths") or {}
         if paths:
             print(
                 "Paths:  "
-                f"knowledge={paths.get('knowledge', '(missing)')} "
-                f"projects={paths.get('projects', '(missing)')} "
-                f"tools={paths.get('tools', '(missing)')}"
+                f"knowledge={paths.get('knowledge', '(absent)')} "
+                f"projects={paths.get('projects', '(absent)')} "
+                f"tools={paths.get('tools', '(absent)')}"
             )
         if info["errors"]:
             for error in info["errors"]:
@@ -510,6 +650,77 @@ def cmd_hub(args: argparse.Namespace) -> int:
     if action == "validate":
         return 0 if info["ok"] else 2
     return 0 if info["ok"] else 1
+
+
+def cmd_zones(args: argparse.Namespace) -> int:
+    state_dir = state_dir_from(args)
+    config_path = state_dir / "config.json"
+    config = load_config(config_path)
+    action = args.zones_action
+
+    if action == "list":
+        zones = parse_zones(config.get("zones", []), config_path)
+        if args.json:
+            print(json_dumps({"zones": zones}))
+        elif not args.quiet:
+            if not zones:
+                print("no zones configured; add one with `guster zones add <path>`")
+            for item in zones:
+                zone_path = Path(item["path"]).expanduser()
+                print(f"{item['path']}  profile={item['profile']}  tools={count_zone_tools(zone_path)}")
+        return 0
+
+    zone_path = Path(args.path).expanduser()
+    raw_zones = config.get("zones", [])
+    if not isinstance(raw_zones, list):
+        raise ValueError(f"Guster config 'zones' must be a list: {config_path}")
+
+    if action == "add":
+        if not zone_path.is_dir():
+            raise ValueError(f"zone directory does not exist: {zone_path.resolve()}")
+        for item in raw_zones:
+            if isinstance(item, dict) and str(item.get("path", "")).strip():
+                if Path(str(item["path"])).expanduser().resolve() == zone_path.resolve():
+                    raise ValueError(f"zone already configured: {zone_path.resolve()}")
+        entry = {"path": str(zone_path), "profile": args.profile}
+        config.setdefault("version", 1)
+        config["zones"] = raw_zones + [entry]
+        zones = parse_zones(config["zones"], config_path)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        save_json(config_path, config)
+        if args.json:
+            print(json_dumps({"ok": True, "added": entry, "zones": zones, "config": str(config_path)}))
+        elif not args.quiet:
+            print(f"added zone: {entry['path']} (profile: {entry['profile']})")
+            print(f"config: {config_path}")
+        return 0
+
+    if action == "remove":
+        remaining = [
+            item
+            for item in raw_zones
+            if not (
+                isinstance(item, dict)
+                and str(item.get("path", "")).strip()
+                and Path(str(item["path"])).expanduser().resolve() == zone_path.resolve()
+            )
+        ]
+        if len(remaining) == len(raw_zones):
+            raise ValueError(f"zone is not configured: {zone_path.resolve()}")
+        if remaining:
+            config["zones"] = remaining
+        else:
+            config.pop("zones", None)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        save_json(config_path, config)
+        if args.json:
+            print(json_dumps({"ok": True, "removed": str(zone_path), "config": str(config_path)}))
+        elif not args.quiet:
+            print(f"removed zone: {zone_path}")
+            print(f"config: {config_path}")
+        return 0
+
+    raise SystemExit(f"unknown zones action: {action}")
 
 
 def cmd_link(args: argparse.Namespace) -> int:
@@ -633,6 +844,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit 2 when CHI is below this value (opt-in gate for CI).",
     )
     score.set_defaults(func=cmd_score)
+
+    check = subparsers.add_parser(
+        "check",
+        parents=[common],
+        help="Run scan, doctor and score --trend in one pass.",
+    )
+    check.add_argument("--no-write", action="store_true", help="Do not write registry, findings or metrics.")
+    check.set_defaults(func=cmd_check)
+
+    zones_parser = subparsers.add_parser("zones", help="List or manage configured machine zones.")
+    zones_sub = zones_parser.add_subparsers(dest="zones_action", required=True)
+    zones_list = zones_sub.add_parser("list", parents=[common], help="List configured zones.")
+    zones_list.set_defaults(func=cmd_zones)
+    zones_add = zones_sub.add_parser("add", parents=[common], help="Add a zone to config.json.")
+    zones_add.add_argument("path", help="Zone directory (must exist).")
+    zones_add.add_argument("--profile", choices=["light", "full"], default="light", help="Zone profile.")
+    zones_add.set_defaults(func=cmd_zones)
+    zones_remove = zones_sub.add_parser("remove", parents=[common], help="Remove a configured zone.")
+    zones_remove.add_argument("path", help="Zone directory as configured.")
+    zones_remove.set_defaults(func=cmd_zones)
 
     plan = subparsers.add_parser("plan", help="Create a reviewable plan.")
     plan_sub = plan.add_subparsers(dest="plan_action", required=True)

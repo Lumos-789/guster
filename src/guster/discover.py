@@ -88,6 +88,10 @@ class ScanConfig:
     # project slots — so a non-git tool layer is governed without pretending
     # each tool is a repository.
     zones: List[Dict[str, str]] = field(default_factory=list)
+    # First-run UX: no config.json existed, and roots came from auto-detection.
+    # Drives the "run `guster init`" banner; empty candidates fail loud earlier.
+    unconfigured: bool = False
+    auto_roots: bool = False
 
 
 def scope_roots(config: ScanConfig) -> Optional[List[Path]]:
@@ -114,23 +118,17 @@ def in_scope_path(value: str, roots: Sequence[Path]) -> bool:
 
 
 def default_roots(home: Path) -> List[Path]:
-    candidates = [home / "IdeaProjects", home / "Projects"]
+    """Generic first-run candidates; empty when none exist so callers fail loud."""
+    candidates = [home / name for name in ("Projects", "code", "dev", "src")]
     seen: Set[str] = set()
     roots: List[Path] = []
     for candidate in candidates:
-        if candidate.exists():
+        if candidate.is_dir():
             resolved = str(candidate.resolve())
             if resolved not in seen:
                 seen.add(resolved)
                 roots.append(candidate)
-    if not roots:
-        roots.append(home)
     return roots
-
-
-def default_hub(home: Path) -> Optional[Path]:
-    candidate = home / "IdeaProjects" / "Guster"
-    return candidate if candidate.exists() else None
 
 
 def dedupe_artifacts(items: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -310,6 +308,9 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
         "scope": config.scope,
         "home": str(home),
         "hub": str(hub) if hub else None,
+        "state_dir": str(config.state_dir),
+        "unconfigured": config.unconfigured,
+        "auto_roots": config.auto_roots,
         "workspaces": [str(root) for root in roots],
         "zones": [
             {

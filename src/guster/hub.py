@@ -12,7 +12,7 @@ from .util import load_json, now_iso, read_text, save_json, today_iso
 
 
 def default_hub_path(home: Path) -> Path:
-    return home / "IdeaProjects" / "Guster"
+    return home / "guster-hub"
 
 
 def template_root() -> Path:
@@ -143,29 +143,29 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
             continue
         rel = _relative(path, hub)
         if legacy and not strict:
-            warnings.append(f"legacy hub is missing the lite contract file: {rel}")
+            warnings.append(f"legacy hub lite contract file is absent: {rel}")
         else:
-            errors.append(f"missing required file: {rel}")
+            errors.append(f"required file is absent: {rel}")
     for path in required_dirs:
         if path.is_dir():
             continue
         rel = _relative(path, hub)
         if legacy and not strict:
-            warnings.append(f"legacy hub is missing the lite directory: {rel}")
+            warnings.append(f"legacy hub lite contract directory is absent: {rel}")
         else:
-            errors.append(f"missing required directory: {rel}")
+            errors.append(f"required directory is absent: {rel}")
 
     if not manifest:
-        message = "hub.yaml is missing or empty"
+        message = "hub.yaml is absent or empty"
         if legacy and not strict:
             warnings.append(message + " (legacy hub)")
         elif (hub / "hub.yaml").is_file():
             errors.append(message)
     else:
         if manifest.get("schema_version") not in {"1", "2"}:
-            errors.append(f"unsupported hub schema: {manifest.get('schema_version') or '(missing)'}")
+            errors.append(f"unsupported hub schema: {manifest.get('schema_version') or '(absent)'}")
         if manifest.get("profile") not in {"lite", "full"}:
-            warnings.append(f"unexpected hub profile: {manifest.get('profile') or '(missing)'}")
+            warnings.append(f"unexpected hub profile: {manifest.get('profile') or '(absent)'}")
         minimum = manifest.get("min_guster")
         if minimum and _version_tuple(minimum) > _version_tuple(__version__):
             errors.append(f"hub requires Guster >= {minimum}; installed CLI is {__version__}")

@@ -202,15 +202,22 @@ class GusterCoreTests(unittest.TestCase):
         self.assertTrue(result["dry_run"])
         self.assertFalse((target / ".agents").exists())
 
-    def test_init_home_writes_roots_from_the_current_home(self) -> None:
+    def test_init_home_writes_detected_roots_and_requires_a_candidate(self) -> None:
         state = self.fx.tmp / "fresh-state"
         home = self.fx.tmp / "fresh-home"
-        home.mkdir()
+        (home / "code").mkdir(parents=True)
         result = init_home(state, yes=True, dry_run=False, home=home)
         self.assertTrue(result["ok"])
         config = json.loads((state / "config.json").read_text(encoding="utf-8"))
-        self.assertEqual(config["roots"], [str(home.resolve())])
+        self.assertEqual(config["roots"], [str((home / "code").resolve())])
         self.assertNotIn("~", json.dumps(config))
+
+    def test_init_home_fails_loud_without_any_candidate(self) -> None:
+        home = self.fx.tmp / "bare-home"
+        home.mkdir()
+        with self.assertRaises(ValueError) as caught:
+            init_home(self.fx.tmp / "bare-state", yes=True, dry_run=False, home=home)
+        self.assertIn("--root", str(caught.exception))
 
     def test_manifest_versions_match(self) -> None:
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
@@ -1502,15 +1509,16 @@ class DeclarativeHubZoneTests(unittest.TestCase):
             "AGENTS.md is only findable if the zone artifact was scanned",
         )
 
-    def test_default_roots_drops_private_root(self) -> None:
+    def test_default_roots_uses_generic_candidates_without_home_fallback(self) -> None:
         (self.home / "IdeaProjects").mkdir()
-        (self.home / "ZCodeProject").mkdir()
-        roots = default_roots(self.home)
-        self.assertEqual([root.name for root in roots], ["IdeaProjects"])
+        self.assertEqual(default_roots(self.home), [])
+        (self.home / "code").mkdir()
+        (self.home / "dev").mkdir()
+        self.assertEqual([root.name for root in default_roots(self.home)], ["code", "dev"])
         (self.home / "Projects").mkdir()
         self.assertEqual(
             [root.name for root in default_roots(self.home)],
-            ["IdeaProjects", "Projects"],
+            ["Projects", "code", "dev"],
         )
 
     def test_zone_config_fails_loud_on_missing_path(self) -> None:
@@ -1525,6 +1533,250 @@ class DeclarativeHubZoneTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             cli.build_config(args)
 
+
+
+class FirstRunCoreCommandTests(unittest.TestCase):
+    """0.9.0 phase 1: first-run detection, config discipline, check/zones."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="guster-p1-"))
+        self.home = self.tmp / "home"
+        self.code = self.home / "code"
+        self.proj = self.code / "app"
+        (self.proj / ".git").mkdir(parents=True)
+        write(self.proj / "AGENTS.md", "# App\n")
+        write(self.proj / ".agents" / "README.md", "# Index\n")
+        self.state = self.tmp / "state"
+
+    def tearDown(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def run_cli(self, argv, home=None):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"HOME": str(home or self.home)}):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = cli.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def write_config(self, payload) -> None:
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "config.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def scan_state(self):
+        return self.run_cli(["scan", "--state-dir", str(self.state)])
+
+    def test_first_run_status_auto_scans_code_with_banner(self) -> None:
+        code, out, err = self.run_cli(["status", "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"workspaces: {self.code}", out)
+        self.assertIn("auto-scanning", out)
+        self.assertIn("`guster init`", out)
+        self.assertIn("no hub attached", out)
+        code, out, _ = self.run_cli(["status", "--json", "--state-dir", str(self.state)])
+        data = json.loads(out)
+        self.assertEqual(data["registry"]["workspaces"], [str(self.code)])
+
+    def test_zero_candidates_fail_loud_and_point_to_init(self) -> None:
+        bare = self.tmp / "bare-home"
+        bare.mkdir()
+        code, _, err = self.run_cli(
+            ["status", "--state-dir", str(self.tmp / "bare-state")], home=bare
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("guster init --root", err)
+        self.assertFalse((self.tmp / "bare-state" / "registry.json").exists())
+
+    def test_roots_string_config_is_a_type_error_not_per_character(self) -> None:
+        self.write_config({"version": 1, "roots": str(self.code)})
+        code, _, err = self.scan_state()
+        self.assertEqual(code, 1)
+        self.assertIn("must be a list", err)
+        self.assertFalse((self.state / "registry.json").exists())
+
+    def test_roots_bad_shapes_fail_loud(self) -> None:
+        cases = [
+            ({"roots": []}, "at least one"),
+            ({"roots": [str(self.tmp / "gone")]}, "does not exist"),
+            ({"roots": ["relative/dir"]}, "absolute"),
+            ({"roots": [123]}, "non-empty strings"),
+            ({"roots": [str(self.code)], "hub": str(self.tmp / "gone-hub")}, "hub directory does not exist"),
+        ]
+        for payload, needle in cases:
+            with self.subTest(payload=payload):
+                self.write_config({"version": 1, **payload})
+                code, _, err = self.scan_state()
+                self.assertEqual(code, 1, err)
+                self.assertIn(needle, err)
+                self.assertFalse((self.state / "registry.json").exists())
+
+    def test_non_object_config_fails_loud(self) -> None:
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "config.json").write_text("[1]", encoding="utf-8")
+        code, _, err = self.scan_state()
+        self.assertEqual(code, 1)
+        self.assertIn("must be a JSON object", err)
+
+    def test_check_runs_the_full_chain_and_carries_doctor_exit(self) -> None:
+        code, out, err = self.run_cli(
+            ["check", "--root", str(self.proj), "--scope", "project", "--state-dir", str(self.state)]
+        )
+        self.assertEqual(code, 2, err)  # fake .git dir -> git-unavailable HIGH
+        self.assertIn("# Guster Context Health", out)
+        self.assertIn("Recent trend:", out)
+        for name in ("registry.json", "findings.json", "metrics.jsonl"):
+            self.assertTrue((self.state / name).is_file(), name)
+
+    def test_check_clean_project_returns_zero(self) -> None:
+        import subprocess
+
+        clean = self.tmp / "clean" / "app"
+        write(clean / "AGENTS.md", "# Clean\n")
+        write(clean / ".agents" / "README.md", "# Index\n")
+        for slot in ("plans", "wiki", "evidence", "skills", "tmp", "archive"):
+            (clean / ".agents" / slot).mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(clean)], check=True)
+        subprocess.run(["git", "-C", str(clean), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(clean), "-c", "user.email=t@example.com", "-c", "user.name=t",
+             "commit", "-q", "-m", "init"],
+            check=True,
+        )
+        code, out, err = self.run_cli(
+            ["check", "--root", str(clean), "--scope", "project", "--state-dir", str(self.state)]
+        )
+        self.assertEqual(code, 0, out + err)
+
+    def test_zones_add_list_remove_roundtrip(self) -> None:
+        zone = self.tmp / "tools-zone"
+        write(zone / "hammer" / "AGENTS.md", "# Hammer\n")
+        code, out, err = self.run_cli(["zones", "add", str(zone), "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        config = json.loads((self.state / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["zones"], [{"path": str(zone), "profile": "light"}])
+
+        code, out, _ = self.run_cli(["zones", "list", "--state-dir", str(self.state)])
+        self.assertEqual(code, 0)
+        self.assertIn(str(zone), out)
+        self.assertIn("profile=light", out)
+        self.assertIn("tools=1", out)
+
+        code, out, _ = self.run_cli(["scan", "--json", "--state-dir", str(self.state)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["zones"][0]["tools"], 1)
+
+        code, _, err = self.run_cli(["zones", "add", str(zone), "--state-dir", str(self.state)])
+        self.assertEqual(code, 1)
+        self.assertIn("already configured", err)
+        code, _, err = self.run_cli(
+            ["zones", "add", str(self.tmp / "nope"), "--state-dir", str(self.state)]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("does not exist", err)
+
+        code, out, _ = self.run_cli(["zones", "remove", str(zone), "--state-dir", str(self.state)])
+        self.assertEqual(code, 0)
+        config = json.loads((self.state / "config.json").read_text(encoding="utf-8"))
+        self.assertNotIn("zones", config)
+        code, _, err = self.run_cli(["zones", "remove", str(zone), "--state-dir", str(self.state)])
+        self.assertEqual(code, 1)
+        self.assertIn("not configured", err)
+
+    def test_zones_empty_list_is_quiet(self) -> None:
+        code, out, err = self.run_cli(["zones", "list", "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("no zones configured", out)
+
+    def test_no_hub_status_exits_zero(self) -> None:
+        code, out, err = self.run_cli(["hub", "status", "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("no hub attached", out)
+        code, out, _ = self.run_cli(["hub", "status", "--json", "--state-dir", str(self.state)])
+        self.assertEqual(json.loads(out), {"attached": False, "hub": None})
+
+    def test_hub_status_after_init_reports_manifest(self) -> None:
+        hub = self.tmp / "hub"
+        hub_state = self.tmp / "hub-state"
+        init_hub(hub, hub_state, yes=True, dry_run=False)
+        code, out, err = self.run_cli(["hub", "status", "--state-dir", str(hub_state)])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Checks: OK", out)
+        self.assertNotIn("(missing)", out)
+
+    def test_hub_attach_hints_a_rescan(self) -> None:
+        hub = self.tmp / "hint-hub"
+        hub_state = self.tmp / "hint-state"
+        init_hub(hub, hub_state, yes=True, dry_run=False)
+        code, out, err = self.run_cli(
+            ["hub", "attach", "--path", str(hub), "--state-dir", str(hub_state)]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("run `guster scan` to refresh", out)
+
+    def test_hub_init_defaults_to_a_generic_path(self) -> None:
+        code, out, err = self.run_cli(["hub", "init", "--yes", "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        self.assertTrue((self.home / "guster-hub" / "hub.yaml").is_file())
+        self.assertFalse((self.home / "IdeaProjects").exists())
+
+    def test_validate_hub_wording_says_absent(self) -> None:
+        empty = self.tmp / "empty-hub"
+        empty.mkdir()
+        info = validate_hub(empty)
+        self.assertFalse(info["ok"])
+        self.assertTrue(any("absent" in item for item in info["errors"]))
+        self.assertFalse(any("missing" in item for item in info["errors"]))
+
+    def test_scoped_status_labels_the_state_dir(self) -> None:
+        code, out, err = self.run_cli(["status", "--root", str(self.proj)])
+        self.assertEqual(code, 0, err)
+        self.assertRegex(out, r"scope: project \(state: .*/\.agents/guster/scoped/[0-9a-f]{10}\)")
+        code, out, _ = self.run_cli(["status", "--root", str(self.proj), "--json"])
+        data = json.loads(out)
+        self.assertEqual(data["scope"], "project")
+        self.assertIn("/scoped/", data["state_dir"])
+
+    def test_init_project_dry_run_lists_the_missing_tree(self) -> None:
+        target = (self.tmp / "no" / "such" / "deep" / "proj").resolve()
+        code, out, err = self.run_cli(
+            ["init", "--project", str(target), "--state-dir", str(self.state)]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("will be created", out)
+        for missing in (target.parent.parent, target.parent, target):
+            self.assertIn(str(missing), out)
+        self.assertIn(f"mkdir {target / '.agents' / 'plans'}", out)
+        self.assertFalse(target.exists())
+
+    def test_bare_init_pins_detected_roots_and_requires_root_when_empty(self) -> None:
+        code, out, err = self.run_cli(["init", "--yes", "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        config = json.loads((self.state / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["roots"], [str(self.code.resolve())])
+
+        bare = self.tmp / "bare-home"
+        bare.mkdir()
+        code, _, err = self.run_cli(
+            ["init", "--yes", "--state-dir", str(self.tmp / "bare2-state")], home=bare
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("--root", err)
+
+        fresh_state = self.tmp / "rooted-state"
+        code, out, err = self.run_cli(
+            ["init", "--yes", "--root", str(self.code), "--state-dir", str(fresh_state)]
+        )
+        self.assertEqual(code, 0, err)
+        config = json.loads((fresh_state / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["roots"], [str(self.code)])
+
+    def test_doctor_report_shows_first_run_banner(self) -> None:
+        code, out, err = self.run_cli(["doctor", "--state-dir", str(self.state)])
+        self.assertEqual(code, 2, err)
+        self.assertIn("**Unconfigured:** auto-scanning", out)
+        self.assertIn("`guster init`", out)
+        self.assertIn("**No hub attached**", out)
 
 
 if __name__ == "__main__":

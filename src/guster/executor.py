@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .discover import default_hub, default_roots
+from .discover import default_roots
 from .util import now_iso, write_text
 
 
@@ -191,6 +191,7 @@ def init_home(
     yes: bool = False,
     dry_run: bool = True,
     home: Optional[Path] = None,
+    roots: Optional[List[Path]] = None,
 ) -> Dict[str, Any]:
     operations = [
         {"kind": "mkdir", "path": str(state_dir)},
@@ -200,14 +201,19 @@ def init_home(
     config_path = state_dir / "config.json"
     if not config_path.exists():
         resolved_home = (home or Path.home()).expanduser().resolve()
+        if roots is None:
+            roots = default_roots(resolved_home)
+        if not roots:
+            raise ValueError(
+                f"no workspace roots detected under {resolved_home} "
+                "(looked for ~/Projects, ~/code, ~/dev, ~/src); "
+                "pass --root <path> to declare where your projects live"
+            )
         config: Dict[str, Any] = {
             "version": 1,
-            "roots": [str(root) for root in default_roots(resolved_home)],
+            "roots": [str(root) for root in roots],
             "scan_max_depth": 5,
         }
-        hub = default_hub(resolved_home)
-        if hub is not None:
-            config["hub"] = str(hub)
         operations.append(
             {
                 "kind": "write",

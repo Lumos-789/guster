@@ -45,6 +45,14 @@ def render_report(
     lines.append(f"> Generated: {metric_result.get('generated_at', now_iso())}")
     if workspaces:
         lines.append(f"> Workspaces: {', '.join(workspaces)}")
+    if registry.get("unconfigured"):
+        if registry.get("auto_roots") and workspaces:
+            lines.append(
+                f"> **Unconfigured:** auto-scanning {', '.join(workspaces)} — "
+                "run `guster init` to pin these roots."
+            )
+        if not registry.get("hub"):
+            lines.append("> **No hub attached** — run `guster hub init` to create one.")
     lines.append("")
     lines.append("## Summary")
     lines.append("")
@@ -241,6 +249,18 @@ def render_status(registry: Dict[str, Any], metric_result: Optional[Dict[str, An
                 for item in zones
             )
         )
+    if registry.get("unconfigured"):
+        if registry.get("auto_roots") and registry.get("workspaces"):
+            lines.append(
+                "note: no config yet — auto-scanning "
+                + ", ".join(registry["workspaces"])
+                + "; run `guster init` to pin roots"
+            )
+        if not registry.get("hub"):
+            lines.append("note: no hub attached; run `guster hub init` to create one")
+    state_dir = registry.get("state_dir")
+    if state_dir and Path(state_dir).parent.name == "scoped":
+        lines.append(f"scope: {registry.get('scope', 'machine')} (state: {state_dir})")
     lines.extend(
         [
             f"projects: {projects}",
