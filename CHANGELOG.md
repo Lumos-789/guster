@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2 — 2026-11-18
+
+- New icon: a 1-bit pixel directory-tree base patrolled by four glowing
+  sparks — the audited-order home with agents shuttling between levels.
+  Part of the shared pixel family across the six plugins; no code changes.
+
 Notable changes. Earlier history is in `git log`.
 
 ## 0.9.1 — 2026-11-14
