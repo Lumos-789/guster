@@ -232,6 +232,44 @@ class GusterCoreTests(unittest.TestCase):
         self.assertEqual(package["version"], zcode["version"])
         self.assertIn(f'version = "{__version__}"', pyproject)
 
+    def test_gcr_is_na_without_a_declared_governance_list(self) -> None:
+        registry = self.fx.registry()
+        self.assertIsNone(registry["governance_docs"])
+        policy = run_policy(registry, self.fx.config())
+        self.assertIsNone(policy["stats"]["governance_docs"])
+        metrics = compute_metrics(registry, policy)
+        self.assertIsNone(metrics["metrics"]["gcr"])
+        self.assertNotIn("gcr", metrics["scores"])
+        self.assertIsNone(metrics["raw"]["governance_docs"])
+        self.assertIn(
+            "Governance simplicity n/a",
+            render_report(registry, policy, metrics),
+        )
+
+    def test_gcr_scores_docs_declared_in_hub_yaml(self) -> None:
+        write(
+            self.fx.hub / "hub.yaml",
+            "schema_version: 1\n"
+            "governance_docs:\n"
+            "  - context-map.md\n"
+            "  - taxonomy.md\n",
+        )
+        write(self.fx.hub / "knowledge" / "general" / "context-map.md", "# Context map\n")
+        write(self.fx.hub / "knowledge" / "general" / "taxonomy.md", "# Taxonomy\n")
+        write(self.fx.home / ".agents" / "wiki" / "not-listed.md", "# Not listed\n")
+        registry = self.fx.registry()
+        self.assertEqual(len(registry["governance_docs"]), 2)
+        result = run_policy(registry, self.fx.config())
+        metrics = compute_metrics(registry, result)
+        self.assertEqual(metrics["metrics"]["gcr"], 0.25)
+        self.assertEqual(metrics["raw"]["governance_docs"], 2)
+        self.assertNotIn("gcr", metrics["scores"])
+
+    def test_governance_doc_declared_empty_entry_fails_loud(self) -> None:
+        write(self.fx.hub / "hub.yaml", 'schema_version: 1\ngovernance_docs:\n  - ""\n')
+        with self.assertRaises(ValueError):
+            self.fx.registry()
+
     def test_hub_init_creates_a_lightweight_contract(self) -> None:
         target = self.fx.tmp / "lite-hub"
         state = self.fx.tmp / "lite-state"
@@ -1685,6 +1723,34 @@ class FirstRunCoreCommandTests(unittest.TestCase):
         code, out, _ = self.run_cli(["status", "--json", "--state-dir", str(self.state)])
         data = json.loads(out)
         self.assertEqual(data["registry"]["workspaces"], [str(self.code)])
+
+    def test_upgrade_compares_cli_against_manifests(self) -> None:
+        code, out, err = self.run_cli(["upgrade", "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        code, out, _ = self.run_cli(["upgrade", "--json", "--state-dir", str(self.state)])
+        data = json.loads(out)
+        self.assertEqual(set(data["versions"]), {"cli", "codex", "zcode", "package"})
+        self.assertEqual(set(data["versions"].values()), {__version__})
+        with mock.patch.object(cli, "__version__", "0.0.0-drift"):
+            code, out, err = self.run_cli(["upgrade", "--state-dir", str(self.state)])
+        self.assertEqual(code, 2)
+        self.assertIn("versions differ", out)
+
+    def test_export_json_writes_only_the_json_report(self) -> None:
+        code, _, err = self.run_cli(
+            ["export", "--format", "json", "--state-dir", str(self.state)]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertTrue((self.state / "context-health.json").is_file())
+        self.assertFalse((self.state / "context-health.md").exists())
+        data = json.loads((self.state / "context-health.json").read_text(encoding="utf-8"))
+        self.assertIn("metrics", data)
+
+    def test_export_md_default_writes_only_the_markdown_report(self) -> None:
+        code, _, err = self.run_cli(["export", "--state-dir", str(self.state)])
+        self.assertEqual(code, 0, err)
+        self.assertTrue((self.state / "context-health.md").is_file())
+        self.assertFalse((self.state / "context-health.json").exists())
 
     def test_zero_candidates_fail_loud_and_point_to_init(self) -> None:
         bare = self.tmp / "bare-home"
