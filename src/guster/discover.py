@@ -650,6 +650,7 @@ def scan_hub_knowledge(
         (hub / "handoff", "state", "state", "project", False, default_suffixes),
         (hub / "provision", "state", "state", "project", False, default_suffixes),
         (hub / "reports", "evidence", "evidence", "project", False, default_suffixes),
+        (hub / "output", "evidence", "evidence", "project", False, default_suffixes),
         (hub / "Human Output", "evidence", "evidence", "project", False, default_suffixes),
         (hub / "manuals", "state", "state", "project", False, default_suffixes),
         (hub / "cron-tasks", "state", "state", "project", False, default_suffixes | {".plist"}),

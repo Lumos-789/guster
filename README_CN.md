@@ -131,7 +131,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 它们记录在 `hub.yaml` 的 `paths` 下，之后也可以修改。路径必须是 Hub 内的相对路径。
 
-扫描按目录是否存在走，不是开关：`hub.yaml` 里的 `profile` 只是标签。Hub 只要有 knowledge 根（其下的 `general/`、`projects/`、`workgroups/`）、配置的项目状态根、`handoff/`、`provision/`、`reports/`、`Human Output/`、`manuals/`、`cron-tasks/`、`openspec/`、`archive/`、`.agents/plans/` 和 `strategy.md`，就会被扫到。`out/`、`.manual-site/`、`.playwright-mcp/`、`.codegraph/` 等生成物或运行态不作为知识源。`--scope hub` 只算 Hub；本地 wiki 和机器级凭据归机器范围。
+扫描按目录是否存在走，不是开关：`hub.yaml` 里的 `profile` 只是标签。Hub 只要有 knowledge 根（其下的 `general/`、`projects/`、`workgroups/`）、配置的项目状态根、`handoff/`、`provision/`、`reports/`、`output/`（旧别名 `Human Output/`）、`manuals/`、`cron-tasks/`、`openspec/`、`archive/`、`.agents/plans/` 和 `strategy.md`，就会被扫到。`out/`、`.manual-site/`、`.playwright-mcp/`、`.codegraph/` 等生成物或运行态不作为知识源。`--scope hub` 只算 Hub；本地 wiki 和机器级凭据归机器范围。
 
 ## 健康模型
 

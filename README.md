@@ -138,7 +138,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 They are recorded in `hub.yaml` under `paths` and can be changed later. Paths must be relative to the Hub and must stay inside it.
 
-Scanning follows the directories that exist, not a mode: `profile` in `hub.yaml` is only a label. A hub is scanned across its knowledge root (`general/`, `projects/` and `workgroups/` under it), the configured project state root, `handoff/`, `provision/`, `reports/`, `Human Output/`, `manuals/`, `cron-tasks/`, `openspec/`, `archive/`, `.agents/plans/` and `strategy.md` whenever those exist. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
+Scanning follows the directories that exist, not a mode: `profile` in `hub.yaml` is only a label. A hub is scanned across its knowledge root (`general/`, `projects/` and `workgroups/` under it), the configured project state root, `handoff/`, `provision/`, `reports/`, `output/` (legacy alias `Human Output/`), `manuals/`, `cron-tasks/`, `openspec/`, `archive/`, `.agents/plans/` and `strategy.md` whenever those exist. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
 
 ## Health model
 

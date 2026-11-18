@@ -23,7 +23,7 @@ User instructions remain a single canonical file with host symlinks.
 ├── provision/       # state
 ├── tools/           # capability
 ├── reports/         # evidence
-├── Human Output/    # evidence / deliverables
+├── output/           # evidence / deliverables (legacy alias: Human Output/)
 └── .agents/         # local plans and scratch
 ```
 
