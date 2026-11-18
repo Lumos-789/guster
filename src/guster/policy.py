@@ -10,11 +10,13 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from .discover import ScanConfig, STANDARD_AGENTS_SLOTS, in_scope_path, scope_roots
 from .layout import load_waivers, resolve_hub_layout
 from .util import (
+    DATE_ONLY_RE,
     NOTE_DATE_KEYS,
     age_days,
     extract_naked_pointers,
     extract_pointers,
     git_last_commit_dates,
+    has_top_level_row_keys,
     is_under,
     load_json,
     note_header_date,
@@ -130,8 +132,7 @@ KNOWLEDGE_STALE_TYPES = {"state", "index"}
 KNOWLEDGE_STALE_DAYS = 90
 REGISTER_SCHEMA = "register/v1"
 REGISTER_KIND = "projects"
-REGISTER_STATUSES = {"active", "pending", "stale", "retired"}
-DATE_ONLY_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$")
+REGISTER_STATUSES = {"active", "pending", "on-hold", "stale", "retired"}
 
 
 def resolve_registry_row_path(raw: str, hub_root: Path, home: Path) -> Optional[Path]:
@@ -147,15 +148,28 @@ def resolve_registry_row_path(raw: str, hub_root: Path, home: Path) -> Optional[
     return (hub_root / candidate).resolve()
 
 
+def resolved_str(raw: str) -> str:
+    """Canonical spelling for finding paths: one doctor report must not mix
+    /tmp and /private/tmp forms of the same directory."""
+    try:
+        return str(Path(raw).resolve())
+    except OSError:
+        return raw
+
+
 def collect_knowledge_v1(
     artifacts: List[Dict[str, Any]], knowledge_root: Optional[Path]
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], List[Tuple[Path, str]]]:
     """Read the metadata face of every knowledge/v1 file under the hub's
     knowledge root. Files without the `schema: knowledge/v1` header are
-    skipped: the format contract is opt-in by declaration."""
+    skipped: the format contract is opt-in by declaration. A file that
+    declares a knowledge/* or register/* schema other than the current one is
+    returned as a mismatch, so a typo'd declaration stays visible instead of
+    silently opting out of every check."""
     docs: List[Dict[str, Any]] = []
+    mismatches: List[Tuple[Path, str]] = []
     if knowledge_root is None:
-        return docs
+        return docs, mismatches
     for item in artifacts:
         if item.get("kind") != "knowledge":
             continue
@@ -165,10 +179,12 @@ def collect_knowledge_v1(
         if not is_under(path, knowledge_root):
             continue
         head = parse_yaml_head(read_text(path, limit=500_000))
-        if head.get("schema") != KNOWLEDGE_SCHEMA:
-            continue
-        docs.append({"path": path, "stem": path.stem, "head": head})
-    return docs
+        declared = head.get("schema")
+        if declared == KNOWLEDGE_SCHEMA:
+            docs.append({"path": path, "stem": path.stem, "head": head})
+        elif isinstance(declared, str) and declared.startswith(("knowledge/", "register/")):
+            mismatches.append((path, declared))
+    return docs, mismatches
 
 
 def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
@@ -365,9 +381,32 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     # notes are never touched. These findings stay outside CHI (same
     # discipline as registry-drift) so scores stay comparable.
     v1_docs: List[Dict[str, Any]] = []
-    if hub is not None:
-        v1_docs = collect_knowledge_v1(artifacts, hub_layout.get("knowledge"))
+    schema_mismatches: List[Tuple[Path, str]] = []
+    knowledge_root = hub_layout.get("knowledge") if hub is not None else None
+    if knowledge_root is not None:
+        v1_docs, schema_mismatches = collect_knowledge_v1(artifacts, knowledge_root)
     stats["knowledge_v1_total"] = len(v1_docs)
+    knowledge_yaml_stems: Set[str] = set()
+    if knowledge_root is not None:
+        for item in artifacts:
+            if item.get("kind") != "knowledge":
+                continue
+            candidate = Path(item["path"])
+            if candidate.suffix.lower() in {".yaml", ".yml"} and is_under(candidate, knowledge_root):
+                knowledge_yaml_stems.add(candidate.stem)
+    for mismatch_path, declared in schema_mismatches:
+        findings.append(
+            finding(
+                "knowledge-format",
+                "info",
+                "knowledge file declares an unsupported schema",
+                str(mismatch_path),
+                f"declares schema {declared} — current supported is {KNOWLEDGE_SCHEMA}; "
+                "the file is skipped by every knowledge/v1 check.",
+                f"Fix the header to '{KNOWLEDGE_SCHEMA}', or drop the schema key to keep it a plain note.",
+                {"declared": declared, "current": KNOWLEDGE_SCHEMA},
+            )
+        )
     known_ids: Set[str] = set()
     for doc in v1_docs:
         doc_id = doc["head"].get("id")
@@ -446,24 +485,34 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     stats["see_also_broken"] = len(broken_refs)
     stats["knowledge_stale"] = len(stale_files)
     if format_bad:
-        first_path, first_issues = format_bad[0]
         findings.append(
             finding(
                 "knowledge-format",
                 "medium",
                 "knowledge/v1 files violate the format contract",
-                first_path,
+                format_bad[0][0],
                 f"{len(format_bad)} file(s) declare knowledge/v1 but break the contract: "
-                + "; ".join(f"{Path(p).name}: {items[0]}" for p, items in format_bad[:5]),
+                + "; ".join(
+                    f"{Path(p).name}: {', '.join(items[:3])}" for p, items in format_bad[:5]
+                ),
                 "Fix the metadata per the CTX-11 contract (reference/spec.md), or drop the schema header.",
                 {
                     "count": len(format_bad),
-                    "issues": [f"{Path(p).name}: {items[0]}" for p, items in format_bad[:20]],
+                    "issues": [
+                        f"{Path(p).name}: {', '.join(items[:3])}"
+                        for p, items in format_bad[:20]
+                    ],
                 },
             )
         )
     if broken_refs:
         first_path, first_missing = broken_refs[0]
+        described = [
+            f"{ref} (file exists but does not declare knowledge/v1)"
+            if ref in knowledge_yaml_stems
+            else ref
+            for ref in first_missing[:5]
+        ]
         findings.append(
             finding(
                 "see-also-broken",
@@ -471,7 +520,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                 "see_also references point at ids that do not exist",
                 first_path,
                 f"{len(broken_refs)} file(s) reference unknown ids; "
-                f"first: {', '.join(first_missing[:5])}.",
+                f"first: {', '.join(described)}.",
                 "Point see_also at existing ids only; rename both sides together, or drop the stale reference.",
                 {"count": len(broken_refs), "refs": first_missing[:10]},
             )
@@ -603,7 +652,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     "misplaced-artifact",
                     "medium",
                     "Project .agents has task-shaped top-level entries",
-                    project["path"],
+                    resolved_str(str(project["path"])),
                     f"{len(unknown)} top-level entr{'y' if len(unknown) == 1 else 'ies'} do not match the standard slots.",
                     "Move task bundles under evidence/, plans/, wiki/ or archive/, then add a README index.",
                     {"entries": unknown[:100], "suggested": suggested},
@@ -779,7 +828,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     "broken-pointer",
                     "high",
                     "Broken context pointer",
-                    str(path),
+                    resolved_str(str(path)),
                     f"{len(broken)} pointer(s) do not resolve.",
                     "Fix the path or replace it with a pointer that states when to read the target.",
                     {"pointers": broken[:10]},
@@ -793,7 +842,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     "naked-pointer",
                     "medium",
                     "Path in prose is not machine-verifiable",
-                    str(path),
+                    resolved_str(str(path)),
                     f"{len(naked)} file path(s) sit outside a link or code span, so the pointer check never sees them.",
                     "Wrap each path in a markdown link or inline code (CTX-03, reference/spec.md).",
                     {"paths": naked[:10]},
@@ -1020,24 +1069,27 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     unscanned_rows: List[str] = []
     register_path: Optional[Path] = None
     register_rows: List[Dict[str, str]] = []
+    register_text = ""
     if hub is not None:
         register_path = hub / "register" / "projects.yaml"
+        register_display = resolved_str(str(register_path))
         if not register_path.is_file() and hub_layout.get("projects") is not None:
             findings.append(
                 finding(
                     "registry-drift",
                     "medium",
                     "Hub has no register/projects.yaml",
-                    str(register_path),
+                    register_display,
                     "The hub declares a projects section but carries no register table, so the "
                     "CTX-10 three-way diff cannot run (0.9.4 replaced projects/_registry.md).",
                     "Create register/projects.yaml (register/v1 header + one row per project); "
                     "see CHANGELOG 0.9.4 for the migration.",
-                    {"hub": str(hub)},
+                    {"hub": resolved_str(str(hub))},
                 )
             )
         if register_path.is_file():
-            register_rows = parse_register_rows(read_text(register_path, limit=1_000_000))
+            register_text = read_text(register_path, limit=1_000_000)
+            register_rows = parse_register_rows(register_text)
             hub_root = hub.expanduser().resolve()
             for row in register_rows:
                 raw = row.get("path") or ""
@@ -1063,11 +1115,15 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
     stats["registry_drift_unscanned_rows"] = len(unscanned_rows)
     if register_path is not None and register_path.is_file():
         format_issues: List[str] = []
-        header = parse_yaml_head(read_text(register_path, limit=10_000))
+        header = parse_yaml_head(register_text)
         if header.get("schema") != REGISTER_SCHEMA:
             format_issues.append(f"schema is {header.get('schema')!r}, expected '{REGISTER_SCHEMA}'")
         if header.get("kind") != REGISTER_KIND:
             format_issues.append(f"kind is {header.get('kind')!r}, expected '{REGISTER_KIND}'")
+        if not register_rows and has_top_level_row_keys(register_text):
+            format_issues.append(
+                "no project rows parsed — expected top-level `- id:` list items under `projects:`"
+            )
         seen_ids: Dict[str, int] = {}
         for row in register_rows:
             row_id = row.get("id") or ""
@@ -1096,9 +1152,9 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     "registry-format",
                     "medium",
                     "Register table violates the register/v1 contract",
-                    str(register_path),
+                    register_display,
                     "; ".join(format_issues[:10]),
-                    "Fix the header (schema/kind/updated) and each row (unique id, spec.path, YYYY-MM-DD as_of).",
+                    "Fix the header (schema/kind) and each row (unique id, spec.path, YYYY-MM-DD as_of).",
                     {"count": len(format_issues), "issues": format_issues[:20]},
                 )
             )
@@ -1108,7 +1164,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     "registry-drift",
                     "medium",
                     "Register rows point at paths that do not exist",
-                    str(register_path),
+                    register_display,
                     f"{len(dead_rows)} row(s) in the register name a path that is not on disk.",
                     "Fix the row path, or delete the row; a register row must resolve to the project directory.",
                     {"count": len(dead_rows), "rows": dead_rows[:10]},
@@ -1120,7 +1176,7 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     "registry-drift",
                     "medium",
                     "Register rows are outside the machine scan",
-                    str(register_path),
+                    register_display,
                     f"{len(unscanned_rows)} registered path(s) exist but the scan never records them; "
                     "the machine table cannot see what the register claims.",
                     "Add the containing directory to the configured roots (guster init/zones), or fix the row path.",
@@ -1141,6 +1197,31 @@ def run_policy(registry: Dict[str, Any], config: ScanConfig) -> Dict[str, Any]:
                     {"count": len(unregistered), "examples": unregistered[:10]},
                 )
             )
+    if hub is not None and (hub / "register").is_dir():
+        try:
+            register_siblings = sorted((hub / "register").iterdir())
+        except OSError:
+            register_siblings = []
+        for extra in register_siblings:
+            if not extra.is_file() or extra.suffix.lower() not in {".yaml", ".yml"}:
+                continue
+            if register_path is not None and extra == register_path:
+                continue
+            head = parse_yaml_head(read_text(extra, limit=10_000))
+            if head.get("schema") == REGISTER_SCHEMA and head.get("kind") != REGISTER_KIND:
+                findings.append(
+                    finding(
+                        "registry-format",
+                        "info",
+                        "Register table declares a kind v1 does not validate",
+                        resolved_str(str(extra)),
+                        f"declares register/v1 kind={head.get('kind')!r} — "
+                        "v1 validates kind: projects only.",
+                        "This table is accepted as register data but never validated; keep the "
+                        "projects table in register/projects.yaml.",
+                        {"kind": head.get("kind")},
+                    )
+                )
     persisted_registry = load_json(config.state_dir / "registry.json", None)
     if isinstance(persisted_registry, dict) and isinstance(persisted_registry.get("projects"), list):
         persisted_paths: Set[str] = set()

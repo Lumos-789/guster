@@ -150,14 +150,16 @@ class GusterCoreTests(unittest.TestCase):
         self.assertTrue((target / ".agents" / "README.md").is_file())
         self.assertTrue((target / "AGENTS.md").is_file())
 
-    def test_plan_move_creates_backup_and_pointer(self) -> None:
+    def test_plan_move_creates_backup_without_pointer(self) -> None:
         src = self.fx.project / ".agents" / "task-x"
         dst = self.fx.project / ".agents" / "evidence" / "task-x"
         plan = plan_move(src, dst)
+        self.assertIsNone(plan["operations"][1]["pointer"])
         result = apply_plan(plan, self.fx.state, dry_run=False, yes=True)
         self.assertTrue(result["ok"])
         self.assertTrue((dst / "a.md").is_file())
-        self.assertTrue((self.fx.project / ".agents" / "task-x.moved.md").is_file())
+        self.assertFalse((self.fx.project / ".agents" / "task-x.moved.md").exists())
+        self.assertEqual(list(src.parent.glob("*.moved.md")), [])
         self.assertTrue((Path(result["backup"]) / "002-task-x" / "a.md").is_file())
 
     def _failing_batch(self, pointer_path) -> dict:
@@ -231,39 +233,6 @@ class GusterCoreTests(unittest.TestCase):
         self.assertEqual(package["version"], codex["version"])
         self.assertEqual(package["version"], zcode["version"])
         self.assertIn(f'version = "{__version__}"', pyproject)
-
-    def test_gcr_is_na_without_a_declared_governance_list(self) -> None:
-        registry = self.fx.registry()
-        self.assertIsNone(registry["governance_docs"])
-        policy = run_policy(registry, self.fx.config())
-        self.assertIsNone(policy["stats"]["governance_docs"])
-        metrics = compute_metrics(registry, policy)
-        self.assertIsNone(metrics["metrics"]["gcr"])
-        self.assertNotIn("gcr", metrics["scores"])
-        self.assertIsNone(metrics["raw"]["governance_docs"])
-        self.assertIn(
-            "Governance simplicity n/a",
-            render_report(registry, policy, metrics),
-        )
-
-    def test_gcr_scores_docs_declared_in_hub_yaml(self) -> None:
-        write(
-            self.fx.hub / "hub.yaml",
-            "schema_version: 1\n"
-            "governance_docs:\n"
-            "  - context-map.md\n"
-            "  - taxonomy.md\n",
-        )
-        write(self.fx.hub / "knowledge" / "general" / "context-map.md", "# Context map\n")
-        write(self.fx.hub / "knowledge" / "general" / "taxonomy.md", "# Taxonomy\n")
-        write(self.fx.home / ".agents" / "wiki" / "not-listed.md", "# Not listed\n")
-        registry = self.fx.registry()
-        self.assertEqual(len(registry["governance_docs"]), 2)
-        result = run_policy(registry, self.fx.config())
-        metrics = compute_metrics(registry, result)
-        self.assertEqual(metrics["metrics"]["gcr"], 0.25)
-        self.assertEqual(metrics["raw"]["governance_docs"], 2)
-        self.assertNotIn("gcr", metrics["scores"])
 
     def test_governance_doc_declared_empty_entry_fails_loud(self) -> None:
         write(self.fx.hub / "hub.yaml", 'schema_version: 1\ngovernance_docs:\n  - ""\n')
@@ -444,7 +413,7 @@ class GusterCoreTests(unittest.TestCase):
         )
         relaxed = validate_hub(target, strict=False)
         self.assertTrue(relaxed["ok"], relaxed)
-        self.assertEqual(relaxed["profile"], "legacy")
+        self.assertEqual(relaxed["manifest"], {})
         self.assertTrue(relaxed["warnings"])
         self.assertFalse(validate_hub(target, strict=True)["ok"])
         result = attach_hub(self.fx.tmp / "legacy-state", target)
@@ -516,7 +485,7 @@ class GusterCoreTests(unittest.TestCase):
             self.assertIn(f"| {label} |", report)
         for label in ("Resident budget", "Placement", "Secret isolation"):
             self.assertNotIn(f"| {label} |", report)
-        self.assertIn("_Not counted in CHI: Governance simplicity", report)
+        self.assertNotIn("Governance simplicity", report)
 
     def test_machine_scope_report_lists_every_scored_dimension(self) -> None:
         registry = self.fx.registry()
@@ -963,7 +932,7 @@ class GusterCoreTests(unittest.TestCase):
         write(self.fx.hub / "knowledge" / "README.md", "# Knowledge\n\n| `general/gone.md` |\n")
         policy = run_policy(self.fx.registry(), self.fx.config())
         paths = {item["path"] for item in policy["findings"] if item["rule"] == "broken-pointer"}
-        self.assertIn(str(self.fx.project / ".agents" / "README.md"), paths)
+        self.assertIn(str((self.fx.project / ".agents" / "README.md").resolve()), paths)
         self.assertIn(str((self.fx.hub / "knowledge" / "README.md").resolve()), paths)
 
     def test_extract_pointers_counts_each_target_once(self) -> None:
@@ -1847,18 +1816,66 @@ class FirstRunCoreCommandTests(unittest.TestCase):
         )
         self.assertEqual(code, 0, out + err)
 
+    def test_link_subcommand_is_gone(self) -> None:
+        with self.assertRaises(SystemExit) as caught:
+            self.run_cli(["link", "--state-dir", str(self.state)])
+        self.assertEqual(caught.exception.code, 2)
+
+    def test_score_headline_shows_dim_coverage_without_a_duplicate_block(self) -> None:
+        code, out, err = self.run_cli(
+            ["score", "--root", str(self.proj), "--scope", "project", "--state-dir", str(self.state)]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertRegex(out, r"Guster Context Health: [0-9.]+ / 100 \(\d/5 dims scored\)")
+        self.assertNotIn("CHI ", out)  # the per-dim list above must not be repeated
+        self.assertIn("Definitions & targets: skills/guster/reference/metrics.md", out)
+        self.assertNotIn("None", out)
+
+    def test_score_trend_renders_na_for_null_chi_snapshots(self) -> None:
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "metrics.jsonl").write_text(
+            '{"at": "2026-01-01T00:00:00+08:00", "chi": null}\n', encoding="utf-8"
+        )
+        code, out, err = self.run_cli(
+            [
+                "score",
+                "--root",
+                str(self.proj),
+                "--scope",
+                "project",
+                "--state-dir",
+                str(self.state),
+                "--no-write",
+                "--trend",
+            ]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("CHI n/a", out)
+        self.assertNotIn("None", out)
+
+    def test_init_home_dry_run_lists_the_files_it_would_create(self) -> None:
+        fresh = self.tmp / "dry-init-state"
+        code, out, err = self.run_cli(
+            ["init", "--root", str(self.code), "--state-dir", str(fresh)]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("DRY RUN: init", out)
+        self.assertIn(f"mkdir {fresh}", out)
+        self.assertIn(f"write {fresh / 'config.json'}", out)
+        self.assertFalse((fresh / "config.json").exists())
+
     def test_zones_add_list_remove_roundtrip(self) -> None:
         zone = self.tmp / "tools-zone"
         write(zone / "hammer" / "AGENTS.md", "# Hammer\n")
         code, out, err = self.run_cli(["zones", "add", str(zone), "--state-dir", str(self.state)])
         self.assertEqual(code, 0, err)
         config = json.loads((self.state / "config.json").read_text(encoding="utf-8"))
-        self.assertEqual(config["zones"], [{"path": str(zone), "profile": "light"}])
+        self.assertEqual(config["zones"], [{"path": str(zone)}])
 
         code, out, _ = self.run_cli(["zones", "list", "--state-dir", str(self.state)])
         self.assertEqual(code, 0)
         self.assertIn(str(zone), out)
-        self.assertIn("profile=light", out)
+        self.assertNotIn("profile", out)
         self.assertIn("tools=1", out)
 
         code, out, _ = self.run_cli(["scan", "--json", "--state-dir", str(self.state)])
@@ -1902,6 +1919,7 @@ class FirstRunCoreCommandTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("Checks: OK", out)
         self.assertNotIn("(missing)", out)
+        self.assertNotIn("profile", out)
 
     def test_hub_attach_hints_a_rescan(self) -> None:
         hub = self.tmp / "hint-hub"
@@ -2572,16 +2590,6 @@ class ReportPlanRegistryTests(unittest.TestCase):
             load("[]")
         self.assertIn("must be a JSON object", str(ctx.exception))
 
-    def test_moved_pointer_carries_a_freshness_date(self) -> None:
-        src = self.tmp / "mv" / "note.md"
-        write(src, "# Note\n")
-        dst = self.tmp / "mv-dest" / "note.md"
-        plan = plan_move(src, dst)
-        content = plan["operations"][1]["pointer"]["content"]
-        self.assertIn("verified_at: ", content)
-        declared = extract_verified_date(content)
-        self.assertRegex(declared, r"^\d{4}-\d{2}-\d{2}$")
-
     def test_plan_ids_and_hub_config_backups_survive_the_same_second(self) -> None:
         from guster.planner import new_plan_id
 
@@ -3178,6 +3186,137 @@ class KnowledgeV1ContractTests(unittest.TestCase):
         ]
         # hub-scope scan sees no roots, so drift stays quiet about the register row
         self.assertFalse([f for f in drift if "projects/app" in str(f.get("evidence"))])
+
+    def test_register_absent_fires_and_an_empty_table_stays_quiet(self) -> None:
+        hub = self.make_hub("sentinel-hub")
+        register = hub / "register" / "projects.yaml"
+        config = self.config(hub)
+
+        policy = run_policy(scan(config), config)
+        self.assertEqual(policy["stats"]["registry_rows"], 0)  # template ships header-only
+        self.assertFalse(
+            [f for f in policy["findings"] if f["rule"] in {"registry-format", "registry-drift"}]
+        )
+
+        register.unlink()
+        policy = run_policy(scan(self.config(hub)), self.config(hub))
+        absent = [
+            f
+            for f in policy["findings"]
+            if f["rule"] == "registry-drift" and "no register/projects.yaml" in f["title"]
+        ]
+        self.assertEqual(len(absent), 1)
+
+    def test_knowledge_schema_typo_fires_info_and_stays_out_of_v1(self) -> None:
+        hub = self.make_hub("typo-hub")
+        doc = (
+            "schema: knowledge/v2\nid: typo-doc\ntype: novel\nstatus: weird\n"
+            "topic: ''\nas_of: '2026-13-99'\nupdated: '2026-13-99'\n"
+        )
+        write(hub / "knowledge" / "general" / "typo-doc.yaml", doc)
+        self.index(hub, "typo-doc.yaml")
+        config = self.config(hub)
+        policy = run_policy(scan(config), config)
+        self.assertEqual(policy["stats"]["knowledge_v1_total"], 0)
+        typo = [
+            f
+            for f in policy["findings"]
+            if f["rule"] == "knowledge-format" and "unsupported schema" in f["title"]
+        ]
+        self.assertEqual(len(typo), 1)
+        self.assertEqual(typo[0]["severity"], "info")
+        self.assertIn("knowledge/v2", typo[0]["message"])
+
+    def test_register_status_vocabulary_is_enforced(self) -> None:
+        hub = self.make_hub("status-hub")
+        register = hub / "register" / "projects.yaml"
+
+        def rows_with(status: str) -> str:
+            return (
+                "schema: register/v1\nkind: projects\nupdated: '2026-11-19'\n"
+                f"- id: app\n  status: {status}\n  as_of: '2026-11-19'\n"
+                "  name: App\n  spec:\n    path: ./\n"
+            )
+
+        for status in ("pending", "on-hold"):
+            with self.subTest(status=status):
+                register.write_text(rows_with(status), encoding="utf-8")
+                policy = run_policy(scan(self.config(hub)), self.config(hub))
+                self.assertFalse(
+                    [f for f in policy["findings"] if f["rule"] == "registry-format"]
+                )
+
+        register.write_text(rows_with("paused"), encoding="utf-8")
+        policy = run_policy(scan(self.config(hub)), self.config(hub))
+        fmt = [f for f in policy["findings"] if f["rule"] == "registry-format"]
+        self.assertEqual(len(fmt), 1)
+        self.assertIn("status 'paused' not in vocabulary", str(fmt[0]["message"]))
+
+    def test_register_flat_map_zero_rows_fire_but_header_only_stays_quiet(self) -> None:
+        hub = self.make_hub("flat-map-hub")
+        register = hub / "register" / "projects.yaml"
+        register.write_text(
+            "schema: register/v1\nkind: projects\nupdated: '2026-11-19'\n"
+            "id: app\nname: App\nspec:\n  path: ./\n",
+            encoding="utf-8",
+        )
+        config = self.config(hub)
+        policy = run_policy(scan(config), config)
+        self.assertEqual(policy["stats"]["registry_rows"], 0)
+        fmt = [f for f in policy["findings"] if f["rule"] == "registry-format"]
+        self.assertEqual(len(fmt), 1)
+        self.assertIn("no project rows parsed", str(fmt[0]["message"]))
+
+    def test_register_sibling_table_with_a_foreign_kind_is_info(self) -> None:
+        hub = self.make_hub("sibling-hub")
+        write(
+            hub / "register" / "tools.yaml",
+            "schema: register/v1\nkind: tools\nupdated: '2026-11-19'\n",
+        )
+        config = self.config(hub)
+        policy = run_policy(scan(config), config)
+        sibling = [
+            f
+            for f in policy["findings"]
+            if f["rule"] == "registry-format" and "tools.yaml" in f["path"]
+        ]
+        self.assertEqual(len(sibling), 1)
+        self.assertEqual(sibling[0]["severity"], "info")
+        self.assertIn("kind v1 does not validate", sibling[0]["title"])
+
+    def test_see_also_distinguishes_undeclared_v1_files_from_unknown_ids(self) -> None:
+        hub = self.make_hub("see-hub")
+        target = "# Plain note without a v1 header\n"
+        write(hub / "knowledge" / "general" / "target.yaml", target)
+        refer = (
+            "schema: knowledge/v1\nid: refer-doc\ntype: howto\nstatus: active\ntopic: t\n"
+            "as_of: '2026-11-19'\nupdated: '2026-11-19'\nsee_also: [target, ghost-id]\n"
+            "body:\n  - h: t\n"
+        )
+        write(hub / "knowledge" / "general" / "refer-doc.yaml", refer)
+        self.index(hub, "target.yaml")
+        self.index(hub, "refer-doc.yaml")
+        config = self.config(hub)
+        policy = run_policy(scan(config), config)
+        broken = [f for f in policy["findings"] if f["rule"] == "see-also-broken"]
+        self.assertEqual(len(broken), 1)
+        self.assertIn("target (file exists but does not declare knowledge/v1)", broken[0]["message"])
+        self.assertIn("ghost-id", broken[0]["message"])
+
+    def test_register_with_a_foreign_kind_is_flagged(self) -> None:
+        hub = self.make_hub("kind-hub")
+        register = hub / "register" / "projects.yaml"
+        register.write_text(
+            "schema: register/v1\nkind: tools\nupdated: '2026-11-19'\n"
+            "- id: app\n  status: active\n  as_of: '2026-11-19'\n"
+            "  name: App\n  spec:\n    path: ./\n",
+            encoding="utf-8",
+        )
+        config = self.config(hub)
+        policy = run_policy(scan(config), config)
+        fmt = [f for f in policy["findings"] if f["rule"] == "registry-format"]
+        self.assertEqual(len(fmt), 1)
+        self.assertIn("kind is 'tools', expected 'projects'", str(fmt[0]["message"]))
 
 
 

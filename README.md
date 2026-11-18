@@ -59,7 +59,7 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster check` | `scan` + `doctor` + `score --trend` in one pass; exit code carries the doctor semantics |
 | `guster zones list/add/remove` | Manage the machine zones in `config.json` |
 | `guster plan findings` | Turn findings into a review checklist |
-| `guster plan move` | Plan a move with backup and pointer |
+| `guster plan move` | Plan a move with backup (no pointer is written) |
 | `guster plan init` | Plan a standard `.agents/` layout |
 | `guster apply <plan>` | Dry-run by default; `--yes` writes with backup |
 | `guster init` | Initialize the state home or a project |
@@ -67,7 +67,6 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster hub attach` | Attach an existing Hub without copying its content |
 | `guster hub status` | Show the Hub manifest and contract checks |
 | `guster hub validate` | Validate the lite Hub contract |
-| `guster link` | Check context pointers |
 | `guster export` | Export a redacted Markdown/JSON report |
 | `guster credentials` | List registered credentials by scope (company / personal) |
 | `guster upgrade` | Check that the CLI, Codex, ZCode and package versions agree |
@@ -80,7 +79,7 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 {
   "version": 1,
   "roots": ["/home/me/Projects"],
-  "zones": [{ "path": "/home/me/tools", "profile": "light" }],
+  "zones": [{ "path": "/home/me/tools" }],
   "scan_max_depth": 5
 }
 ```
@@ -96,10 +95,11 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
   want governed without pretending each tool is a project. A zone is scanned
   light-style: its `AGENTS.md`/`README.md` entry docs join the pointer and
   freshness checks, its `.env` files join the secret scan, and `.agents/`
-  slot compliance never applies. `profile` is recorded and must be
-  `light` or `full`; the scan itself is light for every zone today.
+  slot compliance never applies. An entry is `{path}` only; extra keys a
+  legacy config may still carry (e.g. a retired `profile`) are tolerated
+  and ignored.
 
-Manage zones with the `zones` subcommand (`list`, `add <dir> --profile`,
+Manage zones with the `zones` subcommand (`list`, `add <dir>`,
 `remove <dir>`); it writes `config.json` and applies the same validation.
 
 **First run without a config**: guster probes the conventional directories
@@ -119,14 +119,17 @@ Guster/
 ├── hub.yaml
 ├── knowledge/
 │   ├── README.md
-│   └── general/start-here.md
+│   └── general/
+│       ├── start-here.md
+│       └── knowledge-v1-skeleton.txt
+├── projects/
 ├── register/
 │   └── projects.yaml
 └── tools/
     └── README.md
 ```
 
-`tools/` is present as an index and contract, with no tool preinstalled. `handoff/` and `reports/` are optional and are not created by the lite profile. The scanner skips missing optional directories.
+`tools/` is present as an index and contract, with no tool preinstalled. `handoff/` and `reports/` are optional and are not created by the lite scaffold. The scanner skips missing optional directories.
 
 `guster hub init` refuses a non-empty target, writes a reviewable plan, and attaches the new Hub to `~/.agents/guster/config.json`. Use `guster hub attach --path <hub>` for an existing Hub.
 
@@ -138,7 +141,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 They are recorded in `hub.yaml` under `paths` and can be changed later. Paths must be relative to the Hub and must stay inside it.
 
-Scanning follows the directories that exist, not a mode: `profile` in `hub.yaml` is only a label. Knowledge subzones are discovered, not enumerated — every first-level directory under the knowledge root (`general/`, `projects/`, `machines/`, ...) is scanned and index-checked. A hub is also scanned across the configured project state root, `register/`, `handoff/`, `provision/`, `reports/`, `output/` (legacy alias `Human Output/`), `manuals/`, `cron-tasks/`, `openspec/`, `archive/`, `.agents/plans/` and `strategy.md` whenever those exist. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
+Scanning follows the directories that exist, not a mode: there is no `profile` concept in `hub.yaml` (a leftover key from an older version is ignored, as are unknown top-level manifest keys). Knowledge subzones are discovered, not enumerated — every first-level directory under the knowledge root (`general/`, `projects/`, `machines/`, ...) is scanned and index-checked. A hub is also scanned across the configured project state root, `register/`, `handoff/`, `provision/`, `reports/`, `output/` (legacy alias `Human Output/`), `manuals/`, `cron-tasks/`, `openspec/`, `archive/`, `.agents/plans/` and `strategy.md` whenever those exist. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
 
 ## Health model
 
@@ -172,19 +175,16 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
   configuration. Guster does not scan arbitrary file content for token shapes —
   that is the release gate's job; SIR only claims what it actually looked at.
 
-**GCR** (governance complexity ratio) is reported next to the score, never in
-it. It counts the framework documents named by the hub's `hub.yaml`
-`governance_docs` list (looked up under the hub's `knowledge/general/` and
-`~/.agents/wiki/`); a hub that declares no list has no governance fact to
-measure, so GCR reports `n/a`, and no score is derived from it in any output.
-
 Critical findings do not rescale CHI: they make `doctor` exit 3 (any `high`
 finding exits 2), and the score stays the weighted sum above. Treat the exit code
 as the gate and CHI as the trend.
 
 A dimension with no evidence is reported as `n/a` and dropped from the weighted
 sum instead of scoring 1.0: an empty denominator means "not measured", not
-"perfect". When every dimension of a scope is empty, CHI itself is `n/a`.
+"perfect". When every dimension of a scope is empty, CHI itself is `n/a`, and
+the `score` headline says what it measured — `n/a / 100 (5/7 dims scored)`.
+Metric definitions and targets live in
+[`skills/guster/reference/metrics.md`](skills/guster/reference/metrics.md).
 
 ## Context format spec
 
@@ -193,7 +193,7 @@ dates — so they only see documents that keep the format contract. The contract
 is written down and versioned: [`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)
 (spec_version 2, rules `CTX-01..11` — `CTX-09` structured note header,
   `CTX-10` register/v1 project register, `CTX-11` opt-in knowledge/v1
-machine-readable project registry — markdownlint-style stable IDs). It follows
+structured knowledge contract — markdownlint-style stable IDs). It follows
 open conventions instead of inventing new ones: the open `AGENTS.md` format
 ([agents.md](https://agents.md)) for instruction files — discovery is nested
 and nearest-wins, the same discipline as CTX-01 (a nested `AGENTS.md` narrows
@@ -299,7 +299,7 @@ required, `keys`/`used_by`/`status` are optional):
 |---|---|
 | `0` | success — clean run, or findings no worse than `medium` |
 | `1` | tool/config error: malformed or unreadable plan, an apply that failed mid-operation and was rolled back, missing workspace root, invalid `config.json` (non-list `roots`, a bad root/zone/hub path, empty `roots`, no scan candidates — run `guster init`); `hub status` also returns 1 when the attached hub fails its checks |
-| `2` | `doctor`/`check` found `high` (but no `critical`) findings; `score --fail-under` below target or CHI not computable; `hub validate` failed the lite contract; `link` found broken pointers; `upgrade` found disagreeing plugin versions |
+| `2` | `doctor`/`check` found `high` (but no `critical`) findings; `score --fail-under` below target or CHI not computable; `hub validate` failed the lite contract; `upgrade` found disagreeing plugin versions |
 | `3` | `doctor`/`check` found `critical` findings |
 | `4` | `apply`, `init` or `hub init` refused the plan at preflight — nothing was touched (missing move source, existing destination, bad target type) |
 
@@ -324,8 +324,9 @@ dsh plugin add /path/to/guster
 ### Extra skill roots
 
 By default guster scans `~/.agents/skills`, `~/.codex/skills`, `~/.dsh/skills` and
-`~/.claude/skills`. Additional hosts stay local and are injected without changing
-the published source:
+`~/.claude/skills` (user-level roots only — project-local `.agents/skills/`
+directories are not part of the skill scan). Additional hosts stay local and are
+injected without changing the published source:
 
 ```bash
 export GUSTER_EXTRA_SKILL_ROOTS="name=/path/to/skills:other=/another/path"

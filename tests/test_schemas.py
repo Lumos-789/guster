@@ -158,7 +158,6 @@ class HubSchemaTests(unittest.TestCase):
     def test_waiver_entries_need_rule_and_reason(self) -> None:
         base: Dict[str, Any] = {
             "schema_version": "2",
-            "profile": "lite",
             "paths": {"knowledge": "knowledge", "projects": "projects", "tools": "tools"},
         }
         with_waiver = dict(
@@ -181,9 +180,46 @@ class HubSchemaTests(unittest.TestCase):
         }
         self.assertEqual(validate(declared, HUB_SCHEMA), [])
 
-    def test_unknown_top_level_key_is_rejected(self) -> None:
-        errors = validate({"schema_version": "1", "surprise": "x"}, HUB_SCHEMA)
-        self.assertTrue(any("surprise" in error for error in errors), errors)
+    def test_unknown_top_level_key_is_tolerated(self) -> None:
+        self.assertEqual(validate({"schema_version": "1", "surprise": "x"}, HUB_SCHEMA), [])
+
+    def test_legacy_profile_key_is_tolerated(self) -> None:
+        manifest: Dict[str, Any] = {
+            "schema_version": "2",
+            "profile": "lite",
+            "paths": {"knowledge": "knowledge", "projects": "projects", "tools": "tools"},
+        }
+        self.assertEqual(validate(manifest, HUB_SCHEMA), [])
+
+    def test_hub_validate_ignores_legacy_profile_key(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="guster-schema-") as tmp:
+            hub = Path(tmp) / "hub"
+            state = Path(tmp) / "state"
+            plan = plan_init_hub(hub)
+            self.assertTrue(apply_plan(plan, state, dry_run=False, yes=True)["ok"])
+            manifest_path = hub / "hub.yaml"
+            manifest_path.write_text(
+                "profile: lite\n" + manifest_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            info = validate_hub(hub)
+            self.assertTrue(info["ok"], info["errors"])
+            self.assertEqual(info["warnings"], [])
+
+    def test_hub_validate_requires_iso_updated_date(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="guster-schema-") as tmp:
+            hub = Path(tmp) / "hub"
+            state = Path(tmp) / "state"
+            plan = plan_init_hub(hub)
+            self.assertTrue(apply_plan(plan, state, dry_run=False, yes=True)["ok"])
+            register = hub / "register" / "projects.yaml"
+            register.write_text(
+                "schema: register/v1\nkind: projects\nupdated: '2026/1/5'\n",
+                encoding="utf-8",
+            )
+            info = validate_hub(hub)
+            self.assertFalse(info["ok"])
+            self.assertTrue(any("updated" in error for error in info["errors"]), info["errors"])
 
 
 class PlanSchemaTests(unittest.TestCase):

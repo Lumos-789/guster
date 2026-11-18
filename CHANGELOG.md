@@ -28,6 +28,19 @@ what files declare.
   counter follow. New `registry-format` finding: wrong `schema`/`kind`, duplicate ids,
   missing `spec.path` or non-date `as_of`/`status` (a missing `updated`
   date is caught by strict `hub validate`, not by the finding).
+- **register/v1 shape errors fail loud**: a register whose body carries
+  column-0 `id:`/`name:` mapping keys but parses zero `- id:` rows (the flat
+  single-project map) now raises `registry-format` instead of silently
+  validating nothing. `hub validate`'s `updated:` check is strict ISO at the
+  same time — `2026/1/5` no longer passes, only `2026-01-05`.
+- **register/v1 vocabulary clarified**: `status` adds `on-hold`; `as_of` is
+  optional (checked when present); `name` is optional and never validated;
+  `spec.path: ./` is the legal placeholder for a row that owns no directory
+  of its own; unknown row keys and `spec` subkeys are ignored and never
+  validated — the vocabulary only grows, semantics change only on a
+  spec_version bump. Another register/ YAML declaring register/v1 with a
+  foreign `kind:` gets an info finding: accepted as register data, never
+  validated.
 - **CTX-11: the knowledge/v1 contract** (new, opt-in): a YAML knowledge file
   that declares `schema: knowledge/v1` gets strict checks — required metadata
   (`id` = file stem, `type` required with vocabulary, optional in-vocabulary
@@ -37,13 +50,46 @@ what files declare.
   a 90-day freshness SLA for active `state`/`index` files. Plain notes are
   never touched. Findings: `knowledge-format`, `see-also-broken`,
   `duplicate-knowledge-id`, `knowledge-stale`.
+- **knowledge/v1 typos stay visible**: a knowledge file that declares a
+  `knowledge/*` or `register/*` schema other than knowledge/v1 reports an
+  info finding instead of silently opting out of every check, and a
+  `see-also-broken` reference whose file exists without the v1 header says
+  so in the finding. CTX-02 accepts an equivalent two-column markdown index
+  (backticked path + topic). The hub scaffold gains an all-commented
+  knowledge/v1 skeleton (`knowledge/general/knowledge-v1-skeleton.txt`) and
+  the register template a commented example row.
 - **Dependency-free metadata parsing**: `parse_yaml_head` /
   `parse_register_rows` read only the column-0 metadata face of YAML files
   (scalars, one inline list, nested `spec.path`); the prose body is never
   parsed, so the plugin still runs on a stock Python install.
 - All CTX-11/registry-format findings stay outside CHI (the registry-drift
   discipline), so health scores remain comparable across the upgrade.
-- Templates and both SKILL playbooks rewritten for the register (the
+- **`plan move` stops writing pointers** (breaking for plan outputs): the
+  plan is mkdir + move with a backup; the automatic `<name>.moved.md`
+  transition pointer at the old location is gone. It outlived its
+  referencers, re-triggered `misplaced-artifact`, and read as reversible
+  after the source was gone — update the referencers in the same pass
+  instead.
+- **`guster link` removed**: the standalone pointer listing duplicated what
+  `doctor`'s `broken-pointer` finding already reports. The command, its
+  exit-code row and the report hint are gone.
+- **Zone and hub `profile` retired**: `zones add --profile` is gone and
+  `config.json` zone entries are `{path}` only (a legacy `profile` key is
+  tolerated and ignored); `hub.yaml` loses `profile` (a leftover key is
+  ignored, and unknown top-level manifest keys no longer fail the JSON
+  Schema — local extensions validate too).
+- **GCR leaves every output**: after 0.9.3 made it reported-only, the
+  governance metric is deleted — no `metrics.gcr`, no report footnote. The
+  `hub.yaml` `governance_docs` declaration and the `governance-overlap`
+  finding (more than 4 framework docs) stay.
+- **Score output says what it measured**: a CHI that cannot be computed
+  prints how many dimensions were (`n/a / 100 (5/7 dims scored)`), trend
+  lines render `n/a` instead of `None`, and the output points at
+  `skills/guster/reference/metrics.md` for definitions and targets. The
+  machine-scope summary labels its skills line "(user-level roots only)",
+  `guster init`'s dry run lists the files it would create, and finding
+  paths resolve to one spelling (`/private/tmp` vs `/tmp` no longer mix).
+- **Templates and both SKILL playbooks rewritten for the register (the
   new-project onboarding step now drafts a register/v1 row); `project cards`
   vocabulary retired across docs.
 - **Migration from 0.9.3**: create `register/projects.yaml` (header:
@@ -51,8 +97,10 @@ what files declare.
   project), delete the old `projects/_registry.md`, and re-run
   `guster hub validate`. Until then `hub attach`/`hub status` refuse the hub
   and doctor reports `registry-drift: Hub has no register/projects.yaml`.
-  181 py + 2 node tests green (+15 covering dynamic subzones, yaml index
-  checks, register drift/format and the knowledge/v1 rule family).
+  192 py + 2 node tests green (+26 over 0.9.3, covering dynamic subzones, yaml
+  index checks, register drift/format/shape and vocabulary, knowledge/v1
+  typo visibility, the pointer/link/profile/GCR retirements and the score
+  output).
 
 ## 0.9.3 — 2026-11-18
 

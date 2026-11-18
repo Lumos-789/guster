@@ -84,7 +84,7 @@ guster score --trend
 guster score --fail-under 80   # optional gate: exit 2 when CHI is below the target
 guster check                   # scan + doctor + score --trend in one pass
 guster zones list              # configured machine zones
-guster zones add <dir> [--profile light|full]
+guster zones add <dir>
 guster zones remove <dir>
 guster plan findings
 guster plan move --from <src> --to <dst>
@@ -96,7 +96,6 @@ guster hub init --path <hub> --yes
 guster hub attach --path <hub>
 guster hub status
 guster hub validate
-guster link
 guster export --format md
 guster credentials
 guster upgrade
@@ -177,9 +176,11 @@ orchestration of existing commands, not new machinery.
    the path — and apply with `--yes` once the user has read it.
 5. **Register** — draft a register/v1 row for the hub's
    `register/projects.yaml` (id, status, as_of, name, spec.path and an
-   optional note) and hand it to the user to paste; Guster does not edit hub
-   content itself. `spec.path` resolves against the hub root (or `~` /
-   absolute) and must exist on disk.
+   optional note; `as_of`/`name` are optional, unknown keys are ignored) and
+   hand it to the user to paste; Guster does not edit hub content itself.
+   `spec.path` resolves against the hub root (or `~` / absolute) and must
+   exist on disk — a row that owns no directory of its own uses the `./`
+   placeholder.
 6. **Close the loop** — `guster scan` so the project enters the machine table,
    then `guster doctor`: zero new findings (placement, register row, freshness)
    is the definition of done. `guster check` adds a score baseline in the same
@@ -212,6 +213,6 @@ classification table for the user to approve, never silent.
 |---|---|
 | `0` | success — clean run, or findings no worse than `medium` |
 | `1` | tool/config error: malformed or unreadable plan, an apply that failed mid-operation and was rolled back, missing workspace root, invalid `config.json` (non-list `roots`, a bad root/zone/hub path, empty `roots`, no scan candidates — run `guster init`); `hub status` also returns 1 when the attached hub fails its checks |
-| `2` | `doctor`/`check` found `high` (but no `critical`) findings; `score --fail-under` below target or CHI not computable; `hub validate` failed the lite contract; `link` found broken pointers; `upgrade` found disagreeing plugin versions |
+| `2` | `doctor`/`check` found `high` (but no `critical`) findings; `score --fail-under` below target or CHI not computable; `hub validate` failed the lite contract; `upgrade` found disagreeing plugin versions |
 | `3` | `doctor`/`check` found `critical` findings |
 | `4` | `apply`, `init` or `hub init` refused the plan at preflight — nothing was touched (missing move source, existing destination, bad target type) |

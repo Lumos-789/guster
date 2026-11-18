@@ -85,10 +85,9 @@ class ScanConfig:
     max_depth: int = 5
     scope: str = "machine"
     now: str = field(default_factory=now_iso)
-    # Declared machine zones (`config.json` `zones`): {"path": ..., "profile": ...}.
-    # "light" zones are tool areas — AGENTS/README artifacts and secrets, no
-    # project slots — so a non-git tool layer is governed without pretending
-    # each tool is a repository.
+    # Declared machine zones (`config.json` `zones`): {"path": ...}. Zones are
+    # tool areas — AGENTS/README artifacts and secrets, no project slots — so a
+    # non-git tool layer is governed without pretending each tool is a repository.
     zones: List[Dict[str, str]] = field(default_factory=list)
     # First-run UX: no config.json existed, and roots came from auto-detection.
     # Drives the "run `guster init`" banner; empty candidates fail loud earlier.
@@ -321,7 +320,6 @@ def scan(config: ScanConfig) -> Dict[str, Any]:
         "zones": [
             {
                 "path": str(Path(item["path"]).expanduser()),
-                "profile": item.get("profile", "light"),
                 "tools": count_zone_tools(Path(item["path"]).expanduser()),
             }
             for item in zones
@@ -744,9 +742,9 @@ def scan_zones(
     zones: Sequence[Dict[str, str]],
     errors: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Light-profile zone scan: entry docs and nothing else.
+    """Zone scan: entry docs and nothing else.
 
-    A declared tool zone is not a project tree. The light profile collects
+    A declared tool zone is not a project tree. The scan collects
     AGENTS.md/README.md so pointer health and freshness can see them, and the
     caller feeds the zone root to the secret scan; slot compliance never
     applies because a tool is not a repository with `.agents/` slots.

@@ -8,7 +8,7 @@ from . import __version__
 from .executor import apply_plan
 from .layout import DEFAULT_PATHS, load_manifest, resolve_hub_layout, validate_layout_value
 from .planner import build_plan, op_mkdir, op_write, save_plan
-from .util import EXCLUDE_DIRS, is_indexed, iter_files, load_json_strict, now_iso, read_text, save_json, today_iso, unique_suffix
+from .util import DATE_ONLY_RE, EXCLUDE_DIRS, is_indexed, iter_files, load_json_strict, now_iso, read_text, save_json, today_iso, unique_suffix
 
 
 def default_hub_path(home: Path) -> Path:
@@ -169,8 +169,6 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
     else:
         if manifest.get("schema_version") not in {"1", "2"}:
             errors.append(f"unsupported hub schema: {manifest.get('schema_version') or '(absent)'}")
-        if manifest.get("profile") not in {"lite", "full"}:
-            warnings.append(f"unexpected hub profile: {manifest.get('profile') or '(absent)'}")
         minimum = manifest.get("min_guster")
         if minimum and _version_tuple(minimum) > _version_tuple(__version__):
             errors.append(f"hub requires Guster >= {minimum}; installed CLI is {__version__}")
@@ -203,11 +201,8 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
         register_path = hub / "register" / "projects.yaml"
         if register_path.is_file():
             register = read_text(register_path)
-            if not re.search(
-                r"^updated:\s*['\"]?\d{4}[-/]\d{1,2}[-/]\d{1,2}",
-                register,
-                re.MULTILINE,
-            ):
+            declared = re.search(r"^updated:\s*['\"]?([^'\"\s#]+)", register, re.MULTILINE)
+            if declared is None or not DATE_ONLY_RE.fullmatch(declared.group(1)):
                 errors.append(f"{_relative(register_path, hub)} has no updated date")
 
     return {
@@ -215,7 +210,6 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
         "hub": str(hub),
         "manifest": manifest,
         "paths": {key: _relative(value, hub) for key, value in layout.items()},
-        "profile": manifest.get("profile") or ("legacy" if legacy else ""),
         "errors": errors,
         "warnings": warnings,
         "plugin": __version__,

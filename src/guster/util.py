@@ -409,6 +409,15 @@ def parse_register_rows(text: str) -> List[Dict[str, str]]:
     return rows
 
 
+_TOP_ROW_KEY_LINE = re.compile(r"^(?:id|name):(?:\s|$)", re.MULTILINE)
+
+
+def has_top_level_row_keys(text: str) -> bool:
+    """Column-0 `id:`/`name:` mapping keys — the flat-map mistake behind a
+    register table that parsed zero `- id:` rows."""
+    return _TOP_ROW_KEY_LINE.search(text) is not None
+
+
 def first_heading(text: str, fallback: str = "") -> str:
     for line in text.splitlines():
         if line.startswith("# "):
@@ -539,6 +548,7 @@ def git_last_commit_dates(root: Path) -> Optional[Dict[str, str]]:
 
 NOTE_DATE_KEYS = ("updated", "date", "lastmod", "created")
 _NOTE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[T ][\d:]+)?")
+DATE_ONLY_RE = re.compile(r"^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$")
 
 
 def parse_note_header(text: str) -> Optional[Dict[str, Any]]:
