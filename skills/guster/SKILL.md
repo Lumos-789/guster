@@ -7,7 +7,7 @@ description: Audit and evolve agent context across projects, skills, tools, know
 
 Guster is the control plane for agent context. It discovers projects, instruction files, skills, tools, knowledge, state, evidence and credential references; diagnoses drift; computes a health score; and produces reviewable migration plans.
 
-Guster Hub is the data plane: the optional local repository that holds knowledge, project cards, tools and reports. Guster the plugin does not replace the hub.
+Guster Hub is the data plane: the optional local repository that holds knowledge, the project register, tools and reports. Guster the plugin does not replace the hub.
 
 For a new data plane, use the companion `guster-hub` skill or `guster hub init`.
 
@@ -16,7 +16,7 @@ For a new data plane, use the companion `guster-hub` skill or `guster hub init`.
 Use Guster when the user asks:
 
 - to inspect or reorganize the machine's agent context structure;
-- where a file, skill, tool, project card, knowledge note or credential reference belongs;
+- where a file, skill, tool, register entry, knowledge note or credential reference belongs;
 - to audit drift, duplicates, broken pointers, budgets or stale state;
 - to initialize a project with the standard `.agents/` layout;
 - to onboard a new project — place it, scaffold it and register it (see below);
@@ -35,14 +35,14 @@ Four levels. `--scope` is inferred from `--root` when omitted.
 | Level | Command | Covers | Scored dimensions |
 |---|---|---|---|
 | machine | `guster doctor` | every repo under the workspace roots, declared `zones` and the hub | SSR RBR PCR ICR FRS PHR SIR |
-| hub | `guster doctor --scope hub` | knowledge, project cards, tools, reports, handoffs | SSR ICR FRS PHR |
+| hub | `guster doctor --scope hub` | knowledge, the project register, tools, reports, handoffs | SSR ICR FRS PHR |
 | group | `guster doctor --root A --root B [--root C]` | a requirement family or any set of related repos | SSR PCR ICR FRS PHR |
 | project | `guster doctor --root <repo>` | one repository | SSR PCR ICR FRS PHR |
 
 Rules:
 
 - Machine level owns resident budgets, skill budgets and credential layout.
-- Hub level owns knowledge indexing, project-card freshness and hub pointers.
+- Hub level owns knowledge indexing, register freshness and hub pointers.
 - Group level exposes cross-repo facts: the same file name with different content,
   duplicated copies, and per-repo placement gaps.
 - Project level shows only that repo's findings and states how many machine-level
@@ -142,10 +142,11 @@ not a healthy one.
 ## Format spec
 
 Context assets follow the versioned format contract in `reference/spec.md`
-(CTX-01..10): `AGENTS.md` instruction files, llms.txt-shaped indexes,
+(CTX-01..11): `AGENTS.md` instruction files, llms.txt-shaped indexes,
 machine-verifiable pointers, machine-readable dates, the six `.agents/` slots,
-one home per fact, skill metadata budgets, credentials by reference, and the
-machine-readable project registry table. When writing or moving a context
+one home per fact, skill metadata budgets, credentials by reference, the
+machine-readable project register (register/v1) and the opt-in knowledge/v1
+contract. When writing or moving a context
 asset, follow the spec; when a doctor finding fires, it names the rule that
 was broken. CTX-09 note headers also accept optional `name` and `description`
 keys (the one-fact-per-file shape inspired by the Claude Code memory tool) and
@@ -174,11 +175,13 @@ orchestration of existing commands, not new machinery.
    scaffold the standard layout with `guster init --project <path>` — the
    default dry run lists the tree it will create, which also catches typos in
    the path — and apply with `--yes` once the user has read it.
-5. **Register** — draft a CTX-10 row for the hub's `projects/_registry.md`
-   (slug, display name, project path, note) and hand it to the user to paste;
-   Guster does not edit hub content itself.
+5. **Register** — draft a register/v1 row for the hub's
+   `register/projects.yaml` (id, status, as_of, name, spec.path and an
+   optional note) and hand it to the user to paste; Guster does not edit hub
+   content itself. `spec.path` resolves against the hub root (or `~` /
+   absolute) and must exist on disk.
 6. **Close the loop** — `guster scan` so the project enters the machine table,
-   then `guster doctor`: zero new findings (placement, registry row, freshness)
+   then `guster doctor`: zero new findings (placement, register row, freshness)
    is the definition of done. `guster check` adds a score baseline in the same
    pass.
 
@@ -190,14 +193,14 @@ whose context predates the spec — run the playbook in
 findings as the worklist, one destination class each) → **placement**
 (`plan init` for the slots, one `plan move` or one batch plan for moves —
 paths final before pointers are written) → **content** (index lines, naked
-paths to links, date lines, duplicates to pointer cards, per the CTX table) →
+paths to links, date lines, duplicates to pointer notes, per the CTX table) →
 **verify** (`doctor` zero new findings, `score --trend` before/after). The
 pass is meaning-preserving; deletions and distillations are proposed in the
 classification table for the user to approve, never silent.
 
 ## References
 
-- `reference/spec.md` — context format spec v1 (CTX rules and their findings).
+- `reference/spec.md` — context format spec v2 (CTX rules and their findings).
 - `reference/reformat.md` — legacy context reformat playbook (four passes, classify-before-touch).
 - `reference/framework.md` — 1-3-5-8 framework and placement tree.
 - `reference/metrics.md` — metric definitions, targets and CHI.

@@ -281,7 +281,7 @@ class GusterCoreTests(unittest.TestCase):
             "README.md",
             "hub.yaml",
             "knowledge/README.md",
-            "projects/_registry.md",
+            "register/projects.yaml",
             "tools/README.md",
         ):
             self.assertTrue((target / rel).is_file(), rel)
@@ -320,7 +320,7 @@ class GusterCoreTests(unittest.TestCase):
         for rel in (
             "notes/README.md",
             "notes/general/start-here.md",
-            "work/_registry.md",
+            "register/projects.yaml",
             "scripts/README.md",
         ):
             self.assertTrue((target / rel).is_file(), rel)
@@ -437,7 +437,11 @@ class GusterCoreTests(unittest.TestCase):
         write(target / "AGENTS.md", "# Legacy Hub\n")
         write(target / "knowledge" / "README.md", "# Knowledge\n\n| a |\n|---|\n| `a.md` |\n")
         write(target / "knowledge" / "general" / "a.md", "# A\n")
-        write(target / "projects" / "_registry.md", "# Registry\n\n**最后更新**: 2026-11-03\n")
+        write(target / "projects" / "alpha.md", "# Alpha\n\n**最后更新**: 2026-11-03\n")
+        write(
+            target / "register" / "projects.yaml",
+            "schema: register/v1\nkind: projects\nupdated: '2026-11-03'\n",
+        )
         relaxed = validate_hub(target, strict=False)
         self.assertTrue(relaxed["ok"], relaxed)
         self.assertEqual(relaxed["profile"], "legacy")
@@ -746,12 +750,16 @@ class GusterCoreTests(unittest.TestCase):
         report = render_report(registry, policy, metrics)
         self.assertIn("knowledge 1/2; .agents index 0/0", report)
 
-    def test_hub_scope_report_counts_project_cards_and_omits_empty_workspaces(self) -> None:
+    def test_hub_scope_report_counts_register_entries_and_omits_empty_workspaces(self) -> None:
         hub = self.fx.tmp / "three-card-hub"
         state = self.fx.tmp / "three-card-state"
         init_hub(hub, state, yes=True, dry_run=False)
+        rows = ""
         for slug in ("alpha", "beta", "gamma"):
             write(hub / "projects" / f"{slug}.md", f"# {slug}\n\n**最后更新**: 2026-11-01\n")
+            rows += f"- id: {slug}\n  status: active\n  as_of: '2026-11-01'\n  name: {slug}\n  spec:\n    path: ./projects/{slug}.md\n"
+        register = hub / "register" / "projects.yaml"
+        register.write_text(register.read_text(encoding="utf-8") + rows, encoding="utf-8")
         config = ScanConfig(
             home=self.fx.tmp / "three-card-home",
             hub=hub,
@@ -767,17 +775,21 @@ class GusterCoreTests(unittest.TestCase):
         metrics = compute_metrics(registry, policy)
         report = render_report(registry, policy, metrics)
         self.assertEqual(registry["summary"]["projects"], 0)
-        self.assertEqual(registry["summary"]["project_cards"], 3)
-        self.assertIn("- Projects: **3** (scanned roots: 0)", report)
+        self.assertEqual(registry["summary"]["registry_entries"], 3)
+        self.assertIn("- Registered projects: **3** (scanned roots: 0)", report)
         self.assertNotIn("> Workspaces:", report)
         self.assertIn("state: 4", report)
 
-    def test_hub_doctor_reports_project_cards_not_zero(self) -> None:
+    def test_hub_doctor_reports_register_entries_not_zero(self) -> None:
         hub = self.fx.tmp / "doctor-card-hub"
         state = self.fx.tmp / "doctor-card-state"
         init_hub(hub, state, yes=True, dry_run=False)
+        rows = ""
         for slug in ("alpha", "beta", "gamma"):
             write(hub / "projects" / f"{slug}.md", f"# {slug}\n\n**最后更新**: 2026-11-01\n")
+            rows += f"- id: {slug}\n  status: active\n  as_of: '2026-11-01'\n  name: {slug}\n  spec:\n    path: ./projects/{slug}.md\n"
+        register = hub / "register" / "projects.yaml"
+        register.write_text(register.read_text(encoding="utf-8") + rows, encoding="utf-8")
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(
@@ -793,14 +805,17 @@ class GusterCoreTests(unittest.TestCase):
             )
         text = out.getvalue()
         self.assertEqual(code, 0, err.getvalue())
-        self.assertIn("- Projects: **3** (scanned roots: 0)", text)
+        self.assertIn("- Registered projects: **3** (scanned roots: 0)", text)
         self.assertNotIn("> Workspaces:", text)
 
     def test_hub_scan_covers_extended_areas(self) -> None:
         hub = self.fx.tmp / "extended-hub"
         write(hub / "AGENTS.md", "# Hub\n")
         write(hub / "knowledge" / "README.md", "# Knowledge\n")
-        write(hub / "projects" / "_registry.md", "# Registry\n\n**最后更新**: 2026-11-03\n")
+        write(
+            hub / "register" / "projects.yaml",
+            "schema: register/v1\nkind: projects\nupdated: '2026-11-03'\n",
+        )
         write(hub / "tools" / "README.md", "# Tools\n")
         write(hub / "manuals" / "catalog.json", "{}\n")
         write(hub / "cron-tasks" / "README.md", "# Cron\n")
@@ -832,7 +847,10 @@ class GusterCoreTests(unittest.TestCase):
         hub = self.fx.tmp / "dated-hub"
         write(hub / "AGENTS.md", "# Hub\n")
         write(hub / "knowledge" / "README.md", "# Knowledge\n")
-        write(hub / "projects" / "_registry.md", "# Registry\n\n**最后更新**: 2026-11-03\n")
+        write(
+            hub / "register" / "projects.yaml",
+            "schema: register/v1\nkind: projects\nupdated: '2026-11-03'\n",
+        )
         write(hub / "tools" / "README.md", "# Tools\n")
         write(hub / "handoff" / "20261101-1200-demo.md", "# Handoff\n")
         config = ScanConfig(
@@ -2198,15 +2216,13 @@ class DataAndConcurrencyTests(unittest.TestCase):
         hub = self.tmp / "en-hub"
         state = self.tmp / "en-state"
         init_hub(hub, state, yes=True, dry_run=False)
-        registry_md = hub / "projects" / "_registry.md"
-        registry_md.write_text(
-            registry_md.read_text(encoding="utf-8").replace(
-                "**最后更新**: ", "**Last updated**: "
-            ),
+        register = hub / "register" / "projects.yaml"
+        register.write_text(
+            register.read_text(encoding="utf-8").replace("updated: '", "updated: "),
             encoding="utf-8",
         )
         info = validate_hub(hub)
-        self.assertFalse(any("no verified date" in item for item in info["errors"]), info["errors"])
+        self.assertFalse(any("no updated date" in item for item in info["errors"]), info["errors"])
 
     def test_frontmatter_updated_key_counts_as_declared(self):
         from guster.discover import artifact_record
@@ -2339,7 +2355,7 @@ class ReportPlanRegistryTests(unittest.TestCase):
         self.make_project("dr-ws", "app", git=True)
         outside = self.tmp / "dr-outside"
         outside.mkdir()
-        registry_md = hub / "projects" / "_registry.md"
+        register = hub / "register" / "projects.yaml"
 
         def run_policy_now():
             config = ScanConfig(
@@ -2354,35 +2370,41 @@ class ReportPlanRegistryTests(unittest.TestCase):
             )
             return run_policy(scan(config), config)
 
-        base = registry_md.read_text(encoding="utf-8")
-        registered = base + "| app | App | ../dr-ws/app/ | - |\n"
-        registry_md.write_text(registered, encoding="utf-8")
+        def row(row_id, path):
+            return (
+                f"- id: {row_id}\n  status: active\n  as_of: '2026-11-14'\n"
+                f"  name: {row_id}\n  spec:\n    path: {path}\n"
+            )
+
+        base = register.read_text(encoding="utf-8")
+        registered = base + row("app", "../dr-ws/app/")
+        register.write_text(registered, encoding="utf-8")
         self.assertEqual(self.drift_rules(run_policy_now()), [])
 
         # tamper one row -> dead-path finding appears; restoring removes it
-        tampered = base + "| app | App | ../dr-ws/gone/ | - |\n"
-        registry_md.write_text(tampered, encoding="utf-8")
+        tampered = base + row("app", "../dr-ws/gone/")
+        register.write_text(tampered, encoding="utf-8")
         drift = self.drift_rules(run_policy_now())
         self.assertTrue(any("do not exist" in item["title"] for item in drift))
-        registry_md.write_text(registered, encoding="utf-8")
+        register.write_text(registered, encoding="utf-8")
         self.assertEqual(self.drift_rules(run_policy_now()), [])
 
         # a row outside the scan roots exists but the machine never sees it
-        outside_row = registered + "| tool | Tool | ../dr-outside/ | - |\n"
-        registry_md.write_text(outside_row, encoding="utf-8")
+        outside_row = registered + row("tool", "../dr-outside/")
+        register.write_text(outside_row, encoding="utf-8")
         drift = self.drift_rules(run_policy_now())
         self.assertTrue(any("outside the machine scan" in item["title"] for item in drift))
 
         # deleting the row leaves the scanned project unregistered
-        registry_md.write_text(base + "| tool | Tool | ../dr-outside/ | - |\n", encoding="utf-8")
+        register.write_text(base + row("tool", "../dr-outside/"), encoding="utf-8")
         drift = self.drift_rules(run_policy_now())
         self.assertTrue(any("not registered" in item["title"] for item in drift))
         self.assertTrue(any("outside the machine scan" not in item["title"] for item in drift))
 
         # a remote `host:/path` row names another machine: counted apart,
         # never drifted against the local disk
-        remote_row = registered + "| garden | Garden | garden:/Users/Shared/garden | - |\n"
-        registry_md.write_text(remote_row, encoding="utf-8")
+        remote_row = registered + row("garden", "garden:/Users/Shared/garden")
+        register.write_text(remote_row, encoding="utf-8")
         result = run_policy_now()
         drift = self.drift_rules(result)
         self.assertFalse(
@@ -2871,6 +2893,292 @@ class ConfigDisciplineSweepTests(unittest.TestCase):
             self.assertIn("knowledge/general", hits[0]["suggestion"])
         finally:
             fx.cleanup()
+
+
+class KnowledgeV1ContractTests(unittest.TestCase):
+    """0.9.4: dynamic knowledge subzones, register/v1 ledger, knowledge/v1 format rules."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="guster-v1-"))
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+
+    def tearDown(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def make_hub(self, name: str = "v1-hub") -> Path:
+        hub = self.tmp / name
+        init_hub(hub, self.tmp / f"{name}-state", yes=True, dry_run=False)
+        return hub
+
+    def config(self, hub: Path) -> ScanConfig:
+        return ScanConfig(
+            home=self.home,
+            hub=hub,
+            roots=[],
+            state_dir=self.tmp / "cfg-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="hub",
+            now="2026-11-19T00:00:00+08:00",
+        )
+
+    def index(self, hub: Path, filename: str, topic: str = "t") -> None:
+        idx = hub / "knowledge" / "README.md"
+        idx.write_text(
+            idx.read_text(encoding="utf-8") + f"| `{filename}` | {topic} |\n",
+            encoding="utf-8",
+        )
+
+    def test_dynamic_subzone_is_scanned_and_index_checked(self) -> None:
+        hub = self.make_hub()
+        doc = (
+            "schema: knowledge/v1\nid: pina-ops\ntype: state\nstatus: active\ntopic: ops\n"
+            "as_of: '2026-11-19'\nupdated: '2026-11-19'\nsee_also: []\nbody:\n  - h: t\n    text: |\n      x\n"
+        )
+        write(hub / "knowledge" / "machines" / "pina-ops.yaml", doc)
+        registry = scan(self.config(hub))
+        pairs = {(item["kind"], item["scope"]) for item in registry["artifacts"]}
+        self.assertIn(("knowledge", "machines"), pairs)
+        policy = run_policy(registry, self.config(hub))
+        orphans = [f for f in policy["findings"] if f["rule"] == "orphan-knowledge"]
+        self.assertTrue(any("pina-ops.yaml" in str(f) for f in orphans))
+        self.assertEqual(orphans[0]["severity"], "medium")
+        self.index(hub, "pina-ops.yaml", "ops")
+        policy = run_policy(scan(self.config(hub)), self.config(hub))
+        self.assertFalse(
+            [f for f in policy["findings"] if f["rule"] == "orphan-knowledge" and "pina-ops" in str(f)]
+        )
+        info = validate_hub(hub)
+        self.assertFalse(any("not indexed" in e for e in info["errors"]), info["errors"])
+
+    def test_strict_validate_flags_unindexed_yaml_note(self) -> None:
+        hub = self.make_hub()
+        write(hub / "knowledge" / "machines" / "unindexed.yaml", "# plain\n")
+        info = validate_hub(hub, strict=True)
+        self.assertTrue(any("unindexed.yaml" in e for e in info["errors"]))
+
+    def test_hub_output_alias_is_scanned_as_evidence(self) -> None:
+        hub = self.make_hub()
+        write(hub / "output" / "shot.png.md", "# Shot\n")
+        registry = scan(self.config(hub))
+        rels = {item["rel"] for item in registry["artifacts"]}
+        self.assertIn("output/shot.png.md", rels)
+        kinds = {item["kind"] for item in registry["artifacts"] if item["rel"] == "output/shot.png.md"}
+        self.assertIn("evidence", kinds)
+
+    def test_knowledge_v1_format_see_also_and_stale_rules(self) -> None:
+        hub = self.make_hub()
+        good = (
+            "schema: knowledge/v1\nid: good-doc\ntype: howto\nstatus: active\ntopic: t\n"
+            "as_of: '2026-11-19'\nupdated: '2026-11-19'\nsee_also: []\nbody:\n  - h: t\n"
+        )
+        bad = (
+            "schema: knowledge/v1\nid: wrong-stem\ntype: novel\nstatus: weird\ntopic: ''\n"
+            "as_of: '2026-13-99'\nupdated: '2020-01-01'\nsee_also: not-a-list\nbody:\n  - h: t\n"
+        )
+        stale = (
+            "schema: knowledge/v1\nid: stale-state\ntype: state\nstatus: active\ntopic: t\n"
+            "as_of: '2026-01-01'\nupdated: '2026-01-02'\nsee_also: [ghost-id]\nbody:\n  - h: t\n"
+        )
+        dormant = stale.replace("id: stale-state", "id: dormant-state").replace("status: active", "status: dormant")
+        for filename, text in (
+            ("good-doc.yaml", good),
+            ("bad-doc.yaml", bad),
+            ("stale-state.yaml", stale),
+            ("dormant-state.yaml", dormant),
+        ):
+            write(hub / "knowledge" / "general" / filename, text)
+            self.index(hub, filename)
+        registry = scan(self.config(hub))
+        policy = run_policy(registry, self.config(hub))
+        rules = {f["rule"] for f in policy["findings"]}
+        self.assertIn("knowledge-format", rules)
+        self.assertIn("see-also-broken", rules)
+        self.assertIn("knowledge-stale", rules)
+        fmt = [f for f in policy["findings"] if f["rule"] == "knowledge-format"][0]
+        self.assertIn("does not match file stem", str(fmt))
+        stale_finding = [f for f in policy["findings"] if f["rule"] == "knowledge-stale"][0]
+        self.assertIn("stale-state", str(stale_finding))
+        self.assertNotIn("dormant-state", str(stale_finding))
+
+    def test_duplicate_knowledge_id_across_subzones(self) -> None:
+        hub = self.make_hub()
+        for subzone in ("general", "machines"):
+            text = (
+                f"schema: knowledge/v1\nid: shared-id\ntype: howto\nstatus: active\ntopic: t\n"
+                f"as_of: '2026-11-19'\nupdated: '2026-11-19'\nsee_also: []\nbody:\n  - h: t\n"
+            )
+            write(hub / "knowledge" / subzone / f"shared-id.yaml", text)
+        registry = scan(self.config(hub))
+        policy = run_policy(registry, self.config(hub))
+        dup = [f for f in policy["findings"] if f["rule"] == "duplicate-knowledge-id"]
+        self.assertEqual(len(dup), 1)
+        self.assertIn("shared-id", str(dup[0]["evidence"]))
+
+    def test_upgrade_from_093_registry_md_is_rejected_with_hint(self) -> None:
+        hub = self.make_hub("old-hub")
+        # restore the 0.9.3 shape: _registry.md present, register removed
+        write(hub / "projects" / "_registry.md", "# Registry\n\n**最后更新**: 2026-11-03\n")
+        (hub / "register" / "projects.yaml").unlink()
+        info = validate_hub(hub)
+        self.assertFalse(info["ok"])
+        self.assertTrue(
+            any("migrate from projects/_registry.md" in e for e in info["errors"]),
+            info["errors"],
+        )
+        config = self.config(hub)
+        policy = run_policy(scan(config), config)
+        absent = [
+            f
+            for f in policy["findings"]
+            if f["rule"] == "registry-drift" and "no register/projects.yaml" in f["title"]
+        ]
+        self.assertEqual(len(absent), 1)
+
+    def test_block_style_see_also_is_reported(self) -> None:
+        hub = self.make_hub()
+        doc = (
+            "schema: knowledge/v1\nid: block-see\ntype: howto\nstatus: active\ntopic: t\n"
+            "as_of: '2026-11-19'\nupdated: '2026-11-19'\nsee_also:\n  - some-id\nbody:\n  - h: t\n"
+        )
+        write(hub / "knowledge" / "general" / "block-see.yaml", doc)
+        self.index(hub, "block-see.yaml")
+        config = self.config(hub)
+        policy = run_policy(scan(config), config)
+        fmt = [f for f in policy["findings"] if f["rule"] == "knowledge-format"]
+        self.assertTrue(fmt)
+        self.assertIn("inline list", str(fmt[0]))
+
+    def test_indented_register_rows_are_parsed(self) -> None:
+        from guster.util import parse_register_rows
+
+        rows = parse_register_rows(
+            "projects:\n  - id: app\n    status: active\n"
+            "    spec:\n      path: ~/code/app\n"
+            "deps:\n    - id: nested\n      spec:\n        path: ~/x\n"
+        )
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["id"], "app")
+        self.assertEqual(rows[0]["path"], "~/code/app")
+
+    def test_parsers_strip_bom(self) -> None:
+        from guster.util import parse_register_rows, parse_yaml_head
+
+        head = parse_yaml_head("\ufeffschema: knowledge/v1\nid: x\n")
+        self.assertEqual(head["schema"], "knowledge/v1")
+        rows = parse_register_rows("\ufeff- id: a\n  spec:\n    path: ~/a\n")
+        self.assertEqual(len(rows), 1)
+
+    def test_quoted_values_with_trailing_comments(self) -> None:
+        from guster.util import parse_register_rows, parse_yaml_head
+
+        head = parse_yaml_head('type: "state" # main\n')
+        self.assertEqual(head["type"], "state")
+        rows = parse_register_rows('- id: "alpha" # main\n  spec:\n    path: ~/a\n')
+        self.assertEqual(rows[0]["id"], "alpha")
+
+    def test_scope_gate_survives_orphan_groups(self) -> None:
+        hub = self.make_hub("scope-hub")
+        write(hub / "knowledge" / "general" / "orphan.md", "# orphan, not indexed\n")
+        register = hub / "register" / "projects.yaml"
+        register.write_text(
+            register.read_text(encoding="utf-8")
+            + (
+                "- id: outside\n  status: active\n  as_of: '2026-11-19'\n  name: Outside\n"
+                "  spec:\n    path: ../outside-root/\n"
+            ),
+            encoding="utf-8",
+        )
+        outside = self.tmp / "outside-root"
+        outside.mkdir()
+        config = ScanConfig(
+            home=self.home,
+            hub=hub,
+            roots=[],
+            state_dir=self.tmp / "scope-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="machine",
+            now="2026-11-19T00:00:00+08:00",
+        )
+        policy = run_policy(scan(config), config)
+        self.assertTrue(
+            any("outside the machine scan" in f["title"] for f in policy["findings"]),
+            [f["title"] for f in policy["findings"]],
+        )
+
+    def test_validate_and_doctor_agree_on_json_knowledge(self) -> None:
+        hub = self.make_hub("json-hub")
+        write(hub / "knowledge" / "general" / "data.json", "{}\n")
+        info = validate_hub(hub, strict=True)
+        self.assertTrue(any("data.json" in e for e in info["errors"]), info["errors"])
+
+    def test_v1_header_is_opt_in_for_plain_notes(self) -> None:
+        hub = self.make_hub()
+        write(hub / "knowledge" / "general" / "plain.md", "# Plain note, no contract\n")
+        self.index(hub, "plain.md")
+        registry = scan(self.config(hub))
+        policy = run_policy(registry, self.config(hub))
+        self.assertEqual(policy["stats"]["knowledge_v1_total"], 0)
+        self.assertFalse([f for f in policy["findings"] if f["rule"] == "knowledge-format"])
+
+    def test_register_format_and_drift_findings(self) -> None:
+        hub = self.make_hub()
+        register = hub / "register" / "projects.yaml"
+        rows = (
+            "- id: app\n  status: active\n  as_of: '2026-11-19'\n  name: App\n"
+            "  spec:\n    path: ./projects/app/\n"
+            "- id: app\n  status: active\n  as_of: '2026-11-19'\n  name: App again\n"
+            "  spec:\n    path: ./projects/app/\n"
+        )
+        register.write_text(
+            "schema: wrong/v9\nkind: things\nupdated: '2026-11-19'\n" + rows,
+            encoding="utf-8",
+        )
+        registry = scan(self.config(hub))
+        policy = run_policy(registry, self.config(hub))
+        fmt = [f for f in policy["findings"] if f["rule"] == "registry-format"]
+        self.assertEqual(len(fmt), 1)
+        ev = str(fmt[0]["evidence"])
+        self.assertIn("register/v1", ev)
+        self.assertIn("appears 2 times", ev)
+        drift = [f for f in policy["findings"] if f["rule"] == "registry-drift"]
+        self.assertTrue(any("do not exist" in f["title"] for f in drift))
+
+    def test_valid_register_rows_keep_drift_quiet(self) -> None:
+        hub = self.make_hub()
+        write(hub / "projects" / "app" / "AGENTS.md", "# App\n")
+        register = hub / "register" / "projects.yaml"
+        register.write_text(
+            register.read_text(encoding="utf-8")
+            + (
+                "- id: app\n  status: active\n  as_of: '2026-11-19'\n  name: App\n"
+                "  spec:\n    path: ./projects/app/\n"
+            ),
+            encoding="utf-8",
+        )
+        config = ScanConfig(
+            home=self.home,
+            hub=hub,
+            roots=[hub / "projects"],
+            state_dir=self.tmp / "dr-state",
+            plugin_root=ROOT,
+            max_depth=3,
+            scope="machine",
+            now="2026-11-19T00:00:00+08:00",
+        )
+        policy = run_policy(scan(config), config)
+        drift = [
+            f
+            for f in policy["findings"]
+            if f["rule"] == "registry-drift" and "not registered" in f["title"]
+        ]
+        # hub-scope scan sees no roots, so drift stays quiet about the register row
+        self.assertFalse([f for f in drift if "projects/app" in str(f.get("evidence"))])
+
 
 
 if __name__ == "__main__":

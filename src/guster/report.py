@@ -30,7 +30,12 @@ RULE_ACTION_HINTS = {
     "skill-budget": "trim skill descriptions to one trigger sentence",
     "skill-copy-drift": "make drifted skill copies byte-identical",
     "resident-budget": "demote resident detail into knowledge or skills",
-    "registry-drift": "reconcile the hub registry rows with scanned projects (CTX-10)",
+    "registry-drift": "reconcile the register rows with scanned projects (CTX-10)",
+    "registry-format": "fix the register/v1 header and rows (unique id, spec.path, dates)",
+    "knowledge-format": "fix knowledge/v1 metadata per the CTX-11 contract, or drop the schema header",
+    "see-also-broken": "point see_also at existing ids, or drop the stale reference",
+    "duplicate-knowledge-id": "merge the files or split the ids so each id has one home",
+    "knowledge-stale": "re-verify and bump `updated`, or set status dormant/archived",
     "hub-manifest-missing": "point the hub config at a real hub (`guster hub init`)",
     "note-header-malformed": "fix note front-matter (type key + machine-readable date)",
     "git-unavailable": "fix git access for the failing repositories",
@@ -99,8 +104,8 @@ def render_report(
     scope = metric_result.get("scope", registry.get("scope", "machine"))
     workspaces = registry.get("workspaces", [])
     if scope == "hub":
-        project_cards = summary.get("project_cards", 0)
-        projects_line = f"- Projects: **{project_cards}** (scanned roots: {summary.get('projects', 0)})"
+        registered = summary.get("registry_entries", 0)
+        projects_line = f"- Registered projects: **{registered}** (scanned roots: {summary.get('projects', 0)})"
     else:
         total_projects = int(summary.get("projects", 0))
         containers = int(summary.get("containers", 0))
@@ -304,7 +309,7 @@ def render_status(registry: Dict[str, Any], metric_result: Optional[Dict[str, An
     plugin = registry.get("plugin", {})
     summary = registry.get("summary", {})
     projects = (
-        summary.get("project_cards", 0)
+        summary.get("registry_entries", 0)
         if registry.get("scope") == "hub"
         else summary.get("projects", 0)
     )

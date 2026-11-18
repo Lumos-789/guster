@@ -1,6 +1,6 @@
 # Context Format Spec
 
-spec_version: 1. The format contract for context assets — the shapes that let
+spec_version: 2. The format contract for context assets — the shapes that let
 both an agent and `guster doctor` verify a document without reading minds.
 Each rule carries a stable ID (markdownlint style) and names the finding that
 mechanically enforces it. What no finding enforces is guidance for the agent
@@ -38,24 +38,46 @@ that writes the document.
 | CTX-07 | Skill frontmatter carries `name` and `description` only; one trigger sentence, ≤500 chars each, ≤6,000 chars across the library. | `skill-budget` |
 | CTX-08 | Credentials appear by reference — a path in the registry under the canonical root — never as a value in a document, a config or git. | `secret-in-git`, `secret-outside-root`, `secret-inline`, `secret-undeclared`, `secret-missing` |
 | CTX-09 | A knowledge note may carry YAML front-matter following the Obsidian properties convention (the interchange format Foam/Quartz/Logseq also accept). The header is opt-in: it is machine-checked only when it declares `type:`. A checked header must parse and carry a machine-readable date (`updated`/`date`/`lastmod`/`created` as YYYY-MM-DD), and the note's body then joins the CTX-03 pointer scan — truth sources go in the body as links, never as invented header keys. Optional keys: `name` and `description` state what the note is (the one-fact-per-file shape inspired by the Claude Code memory tool), and `superseded_by` names the path or stem of the note that replaced this one; that key is metadata about the note, not a truth source, so it never joins the pointer scan and never raises a finding. | `note-header-malformed`, `broken-pointer`, `naked-pointer` |
-| CTX-10 | The hub's project registry (`projects/_registry.md`) is a machine-readable table. The header row names the columns; whichever column header contains `path` or `路径` is the path column, and each row's cell there holds one project location — `~/...`, absolute, or relative to the hub root. The slug column (first column) never counts as a path. Remote forms (`host:/path`, URLs) and placeholder cells (`-`, `—`) are skipped, not resolved. | `registry-drift` |
+| CTX-10 | The hub's project register (`register/projects.yaml`) follows the register/v1 format: a `schema: register/v1` + `kind: projects` + `updated:` header, then one row per project with `id` (unique), `status` (active, pending, stale, retired; optional but in-vocabulary), `as_of` (YYYY-MM-DD), `name` and `spec.path`. `spec.path` is the project location — `~/...`, absolute, or relative to the hub root — and must resolve to a directory on this machine. Remote forms (`host:/path`, URLs) are counted apart, never resolved. | `registry-drift`, `registry-format` |
+| CTX-11 | A YAML knowledge file may declare `schema: knowledge/v1` to opt into the structured knowledge contract. An opted-in file must carry, at the top level: `id` (equal to the file stem), `type` (state, howto, principle, pitfall, decision, index, reference), `status` (active, dormant, superseded, archived; optional but must be in-vocabulary), `topic` (non-empty one-liner), `as_of` and `updated` (YYYY-MM-DD, `updated` ≥ `as_of`), and optionally `see_also` — an inline list of **ids of other files in the same knowledge root** (bare ids only; path-like references belong in the body under CTX-03). Local extensions (zone, host, history, ...) are allowed and ignored. Freshness: active `state`/`index` files older than 90 days (`updated`) raise `knowledge-stale`. | `knowledge-format`, `see-also-broken`, `duplicate-knowledge-id`, `knowledge-stale` |
 
 ### CTX-10 in detail
 
-The registry table is read through its path column, so a row is only as good
-as its path cell. Conventions that keep the three-way diff (machine table
-`registry.json` ↔ this human table ↔ git roots on disk) meaningful:
+The register is read through `spec.path`, so a row is only as good as its
+path. Conventions that keep the three-way diff (machine table `registry.json`
+↔ this register ↔ git roots on disk) meaningful:
 
-- Header row first: the parser finds the path column by header name
-  (`path` / `路径`, case-insensitive) and never guesses by position.
-- One project per row; the path cell names the project **directory**, not a
-  file inside it. Trailing `/` and wrapping backticks are tolerated.
+- One project per row; `spec.path` names the project **directory** (or a
+  knowledge-backed entry such as a topic file), not an arbitrary file.
 - `~/`-relative paths resolve against the user's home; bare relative paths
   resolve against the **hub root**; absolute paths resolve as-is.
+- A malformed header (wrong `schema`/`kind`, no `updated` date), a duplicated
+  `id`, a missing `spec.path` or a non-date `as_of` raises `registry-format`
+  (medium).
 - A row whose path does not exist on disk is a dead row (`registry-drift`,
   medium); a row that exists but is never scanned points outside the
   configured roots (medium); a scanned project with no row is unregistered
   (low). Remote references are counted apart instead of drifting forever.
+
+### CTX-11 in detail
+
+The knowledge/v1 contract is opt-in and metadata-only: the plugin reads the
+column-0 keys of the YAML file (scalars, one inline list for `see_also`) and
+never parses the `body`. That keeps the check dependency-free and the prose
+free-form.
+
+- `see_also` accepts bare ids; each id must belong to a file that also
+  declares knowledge/v1 in the same knowledge root (reference a plain note
+  and the checker cannot see its id). Path-like or remote references are
+  left to CTX-03 and never flagged here.
+- One id, one file: the same id in two files (even across subzones) raises
+  `duplicate-knowledge-id`.
+- Freshness applies only to active `state` and `index` types — principles and
+  references do not rot. Set `status: dormant` or `archived` to take a file
+  out of the freshness SLA deliberately.
+- Subzones under the knowledge root are discovered, not enumerated:
+  `general/`, `projects/`, `machines/` or any first-level directory is scanned
+  and index-checked the same way.
 
 ### Credential registry table
 
@@ -92,7 +114,7 @@ what keeps the contract from drifting. Both directions are load-bearing.
 When creating or moving a context asset:
 
 1. Pick the home by CTX-06, the slot by CTX-05, the index entry by CTX-02; a
-   new project gets its registry row by CTX-10.
+   new project gets its register row by CTX-10.
 2. Write pointers as `[label](relative/path.md)` in indexes and `` `path` ``
    in prose; add when-to-read in the same sentence.
 3. Add the date line before saving a state document; run `guster doctor`

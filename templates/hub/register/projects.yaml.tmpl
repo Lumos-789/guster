@@ -1,0 +1,7 @@
+schema: register/v1
+kind: projects
+updated: '{{DATE}}'
+# One row per project. Keys: id / status (active|pending|stale|retired) /
+# as_of "YYYY-MM-DD" / name / desc / spec.path (relative to the hub root, or ~/
+# or absolute) / spec.aliases / notes. spec.path must resolve to a directory
+# that exists on this machine.

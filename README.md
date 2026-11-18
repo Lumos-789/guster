@@ -2,13 +2,13 @@
 
 Guster is a distributable agent plugin that audits and evolves the context of a whole machine: projects, instruction files, skills, tools, knowledge, project state, evidence and credential references. It can also scaffold a lightweight Hub for durable knowledge and project state.
 
-It is the **control plane** for agent context. A Guster Hub is the optional **data plane**: the local repository that holds project cards, knowledge, tools and reports. The plugin does not replace the hub; it discovers it, validates it, and helps keep it coherent.
+It is the **control plane** for agent context. A Guster Hub is the optional **data plane**: the local repository that holds the project register, knowledge, tools and reports. The plugin does not replace the hub; it discovers it, validates it, and helps keep it coherent.
 
 ## Prior art
 
 The ideas are borrowed with credit; the implementation is guster's own.
 
-- **Cline Memory Bank** — inspired the layered responsibilities of the files (project cards, knowledge, state) and the banking rhythm of refreshing them per working session; both banks are plain markdown.
+- **Cline Memory Bank** — inspired the layered responsibilities of the files (project register, knowledge, state) and the banking rhythm of refreshing them per working session; both banks are plain markdown.
 - **Claude Code memory tool** — inspired the one-fact-per-file note shape and front-matter metadata; guster's note headers spell the keys `name`, `description`, `type`.
 - **Letta (MemGPT)** — inspired the label/limit abstraction of memory blocks behind guster's resident budgets.
 - **Mem0** — inspired the decide-first stance (ADD/UPDATE/DELETE/NOOP, soft invalidation by marking instead of deleting) behind plan/apply/waiver; a waiver greens the gate, not the score.
@@ -120,8 +120,8 @@ Guster/
 ├── knowledge/
 │   ├── README.md
 │   └── general/start-here.md
-├── projects/
-│   └── _registry.md
+├── register/
+│   └── projects.yaml
 └── tools/
     └── README.md
 ```
@@ -138,7 +138,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 They are recorded in `hub.yaml` under `paths` and can be changed later. Paths must be relative to the Hub and must stay inside it.
 
-Scanning follows the directories that exist, not a mode: `profile` in `hub.yaml` is only a label. A hub is scanned across its knowledge root (`general/`, `projects/` and `workgroups/` under it), the configured project state root, `handoff/`, `provision/`, `reports/`, `output/` (legacy alias `Human Output/`), `manuals/`, `cron-tasks/`, `openspec/`, `archive/`, `.agents/plans/` and `strategy.md` whenever those exist. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
+Scanning follows the directories that exist, not a mode: `profile` in `hub.yaml` is only a label. Knowledge subzones are discovered, not enumerated — every first-level directory under the knowledge root (`general/`, `projects/`, `machines/`, ...) is scanned and index-checked. A hub is also scanned across the configured project state root, `register/`, `handoff/`, `provision/`, `reports/`, `output/` (legacy alias `Human Output/`), `manuals/`, `cron-tasks/`, `openspec/`, `archive/`, `.agents/plans/` and `strategy.md` whenever those exist. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
 
 ## Health model
 
@@ -157,9 +157,10 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
   breakdown, so a low number says why instead of just being low.
 - **ICR** index coverage rate
 - **FRS** state freshness rate: share of state documents under the hub's
-  project root (`projects/`), `handoff/`, `provision/` and `.agents/plans/`
-  that were verified within the 90-day SLA. The denominator is those four
-  prefixes only — a hub `reports/` file or a machine-level note is not state.
+  project root (`projects/`), `register/`, `handoff/`, `provision/` and
+  `.agents/plans/` that were verified within the 90-day SLA. The denominator
+  is those prefixes only — a hub `reports/` file or a machine-level note is
+  not state.
   The date comes from a declared key — `verified_at` (canonical), the Chinese
   `最后更新` family or the English `Last updated:`/`updated:` — in the first 40
   lines, or a date that opens the filename (`2026-11-05-…`, `20261105-…`);
@@ -190,7 +191,8 @@ sum instead of scoring 1.0: an empty denominator means "not measured", not
 The metrics are static — filename stems, content hashes, path resolution, git
 dates — so they only see documents that keep the format contract. The contract
 is written down and versioned: [`skills/guster/reference/spec.md`](skills/guster/reference/spec.md)
-(spec_version 1, rules `CTX-01..10` — `CTX-09` structured note header, `CTX-10`
+(spec_version 2, rules `CTX-01..11` — `CTX-09` structured note header,
+  `CTX-10` register/v1 project register, `CTX-11` opt-in knowledge/v1
 machine-readable project registry — markdownlint-style stable IDs). It follows
 open conventions instead of inventing new ones: the open `AGENTS.md` format
 ([agents.md](https://agents.md)) for instruction files — discovery is nested
@@ -277,7 +279,7 @@ required, `keys`/`used_by`/`status` are optional):
 2. **Instruction** — `AGENTS.md` and policies.
 3. **Capability** — skills, tools, MCP, plugins, scripts.
 4. **Knowledge** — durable principles, methods, business semantics, pitfalls.
-5. **State** — project cards, handoffs, environment and port registries.
+5. **State** — the project register, handoffs, environment and port registries.
 6. **Evidence** — reports, screenshots, videos, test output.
 7. **Runtime** — sessions, caches, logs, temp files, browser profiles.
 8. **Secret** — passwords, tokens, keys, cookies; references only.

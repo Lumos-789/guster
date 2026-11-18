@@ -1,17 +1,58 @@
 # Changelog
 
-## 0.9.4 — 2026-11-18
+## 0.9.4 — 2026-11-19
 
-One file less that a hub owes nobody: the root README.md is no longer part of
-the hub contract. AGENTS.md already is the entry document; a README is a
-forge-facing convention, and a local-only hub has no audience for a second
-entry file.
+The hub contract catches up with the reference hub's 2026-11-19 restructure,
+and the format spec gains its first structured-knowledge contract. The plugin
+still ships no organization policy — it discovers what exists and validates
+what files declare.
 
-- **Root README.md is optional** (relaxation): `validate_hub` required
-  `AGENTS.md`, `README.md` and `hub.yaml` at the hub root. Required root files
-  are now `AGENTS.md` + `hub.yaml`; an existing root README.md is still scanned
-  as an entry doc, and `hub init` still scaffolds one for new hubs that want
-  it. +1 test (schema-2 hub validates green with the README deleted).
+- **Root README.md is optional** (relaxation): required root files are now
+  `AGENTS.md` + `hub.yaml`; an existing root README.md stays untouched (no
+  check depends on it), and `hub init` still scaffolds one. +1 test.
+- **Hub scan alias `output/`** joins `Human Output/` (kept as the legacy
+  alias) for evidence/deliverables directories.
+- **Knowledge subzones are discovered, not enumerated**: the scanner no
+  longer hardcodes `general/` + `projects/` + `workgroups/` under the
+  knowledge root. Every first-level directory (`machines/`, or anything) is
+  scanned as knowledge and index-checked against `knowledge/README.md`.
+  Strict validation now index-checks `.yaml`/`.yml` notes, not only `.md`,
+  and only requires the knowledge root plus its README — no specific subzone
+  names.
+- **CTX-10 becomes register/v1** (breaking, spec_version 2): the hub's human
+  project table moves from `projects/_registry.md` (markdown table) to
+  `register/projects.yaml` — a `schema: register/v1` + `kind: projects` +
+  `updated:` header with one row per project (`id`, `status`, `as_of`,
+  `name`, `spec.path`). `hub init` scaffolds it; validation requires it; the
+  three-way drift diff (machine table ↔ register ↔ disk) and the entry
+  counter follow. New `registry-format` finding: wrong `schema`/`kind`, duplicate ids,
+  missing `spec.path` or non-date `as_of`/`status` (a missing `updated`
+  date is caught by strict `hub validate`, not by the finding).
+- **CTX-11: the knowledge/v1 contract** (new, opt-in): a YAML knowledge file
+  that declares `schema: knowledge/v1` gets strict checks — required metadata
+  (`id` = file stem, `type` required with vocabulary, optional in-vocabulary
+  `status`, non-empty `topic`,
+  YYYY-MM-DD `as_of`/`updated` with `updated` ≥ `as_of`), `see_also` bare-id
+  cross-references resolved against the knowledge root, one-id-one-file, and
+  a 90-day freshness SLA for active `state`/`index` files. Plain notes are
+  never touched. Findings: `knowledge-format`, `see-also-broken`,
+  `duplicate-knowledge-id`, `knowledge-stale`.
+- **Dependency-free metadata parsing**: `parse_yaml_head` /
+  `parse_register_rows` read only the column-0 metadata face of YAML files
+  (scalars, one inline list, nested `spec.path`); the prose body is never
+  parsed, so the plugin still runs on a stock Python install.
+- All CTX-11/registry-format findings stay outside CHI (the registry-drift
+  discipline), so health scores remain comparable across the upgrade.
+- Templates and both SKILL playbooks rewritten for the register (the
+  new-project onboarding step now drafts a register/v1 row); `project cards`
+  vocabulary retired across docs.
+- **Migration from 0.9.3**: create `register/projects.yaml` (header:
+  `schema: register/v1`, `kind: projects`, `updated:` date; then one row per
+  project), delete the old `projects/_registry.md`, and re-run
+  `guster hub validate`. Until then `hub attach`/`hub status` refuse the hub
+  and doctor reports `registry-drift: Hub has no register/projects.yaml`.
+  181 py + 2 node tests green (+15 covering dynamic subzones, yaml index
+  checks, register drift/format and the knowledge/v1 rule family).
 
 ## 0.9.3 — 2026-11-18
 

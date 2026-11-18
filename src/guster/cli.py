@@ -302,7 +302,7 @@ def print_scan_summary(registry: Dict[str, Any], config: ScanConfig) -> None:
     print(f"  hub:        {registry.get('hub') or '(none)'}")
     if config.scope == "hub":
         print(
-            f"  projects:   {summary.get('project_cards', 0)} "
+            f"  registered: {summary.get('registry_entries', 0)} "
             f"(scanned roots: {summary.get('projects', 0)})"
         )
     else:

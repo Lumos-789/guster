@@ -6,6 +6,7 @@ This hub is the data plane. The Guster plugin discovers it, checks its structure
 
 - `general/` — reusable principles, methods and tool notes that apply across projects.
 - `projects/` — durable business and architecture knowledge for one project.
-- the hub's project state lives outside this knowledge root and is listed in its registry.
+- more subzones (e.g. `reference/`) may exist; every first-level directory here is discovered automatically.
+- the hub's project register lives outside this knowledge root in `register/projects.yaml`.
 
 Keep one topic per file. Add every knowledge file to [the knowledge index](../README.md).
