@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.4 — 2026-11-18
+
+One file less that a hub owes nobody: the root README.md is no longer part of
+the hub contract. AGENTS.md already is the entry document; a README is a
+forge-facing convention, and a local-only hub has no audience for a second
+entry file.
+
+- **Root README.md is optional** (relaxation): `validate_hub` required
+  `AGENTS.md`, `README.md` and `hub.yaml` at the hub root. Required root files
+  are now `AGENTS.md` + `hub.yaml`; an existing root README.md is still scanned
+  as an entry doc, and `hub init` still scaffolds one for new hubs that want
+  it. +1 test (schema-2 hub validates green with the README deleted).
+
 ## 0.9.3 — 2026-11-18
 
 The honest-third-party release: no measurement ships with a built-in list of

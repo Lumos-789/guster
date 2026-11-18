@@ -125,7 +125,7 @@ def validate_hub(target: Path, strict: bool = True) -> Dict[str, Any]:
         and (hub / "knowledge").is_dir()
         and (hub / "projects").is_dir()
     )
-    required_files = [hub / "AGENTS.md", hub / "README.md", hub / "hub.yaml"]
+    required_files = [hub / "AGENTS.md", hub / "hub.yaml"]
     required_dirs = []
     if "knowledge" in layout:
         required_files.append(layout["knowledge"] / "README.md")

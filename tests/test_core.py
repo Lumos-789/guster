@@ -412,6 +412,13 @@ class GusterCoreTests(unittest.TestCase):
         self.assertFalse(info["ok"])
         self.assertTrue(any("not indexed" in item for item in info["errors"]))
 
+    def test_hub_validate_tolerates_absent_root_readme(self) -> None:
+        target = self.fx.tmp / "no-readme-hub"
+        init_hub(target, self.fx.tmp / "no-readme-state", yes=True, dry_run=False)
+        (target / "README.md").unlink()
+        info = validate_hub(target)
+        self.assertTrue(info["ok"], info)
+
     def test_hub_attach_backs_up_existing_config(self) -> None:
         target = self.fx.tmp / "attached-hub"
         state = self.fx.tmp / "attached-state"
