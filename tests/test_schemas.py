@@ -13,7 +13,16 @@ sys.path.insert(0, str(ROOT / "src"))
 from guster.executor import apply_plan  # noqa: E402
 from guster.hub import plan_init_hub, validate_hub  # noqa: E402
 from guster.layout import load_manifest  # noqa: E402
-from guster.planner import build_plan, op_manual, op_mkdir, op_move, op_write  # noqa: E402
+from guster.planner import (  # noqa: E402
+    PLAN_OPERATION_FIELDS,
+    PLAN_OPERATION_KINDS,
+    PLAN_TOP_REQUIRED,
+    build_plan,
+    op_manual,
+    op_mkdir,
+    op_move,
+    op_write,
+)
 
 HUB_SCHEMA_URL = "https://raw.githubusercontent.com/Lumos-789/guster/main/schemas/hub.schema.json"
 PLAN_SCHEMA_URL = "https://raw.githubusercontent.com/Lumos-789/guster/main/schemas/plan.schema.json"
@@ -150,7 +159,7 @@ class HubSchemaTests(unittest.TestCase):
             hub = Path(tmp) / "hub"
             state = Path(tmp) / "state"
             plan = plan_init_hub(hub)
-            result = apply_plan(plan, state, dry_run=False, yes=True)
+            result = apply_plan(plan, state, dry_run=False, yes=True, extra_bases=[hub])
             self.assertTrue(result["ok"], result.get("errors"))
             self.assertTrue(validate_hub(hub)["ok"])
             self.assertEqual(validate(load_manifest(hub / "hub.yaml"), HUB_SCHEMA), [])
@@ -196,7 +205,9 @@ class HubSchemaTests(unittest.TestCase):
             hub = Path(tmp) / "hub"
             state = Path(tmp) / "state"
             plan = plan_init_hub(hub)
-            self.assertTrue(apply_plan(plan, state, dry_run=False, yes=True)["ok"])
+            self.assertTrue(
+                apply_plan(plan, state, dry_run=False, yes=True, extra_bases=[hub])["ok"]
+            )
             manifest_path = hub / "hub.yaml"
             manifest_path.write_text(
                 "profile: lite\n" + manifest_path.read_text(encoding="utf-8"),
@@ -211,7 +222,9 @@ class HubSchemaTests(unittest.TestCase):
             hub = Path(tmp) / "hub"
             state = Path(tmp) / "state"
             plan = plan_init_hub(hub)
-            self.assertTrue(apply_plan(plan, state, dry_run=False, yes=True)["ok"])
+            self.assertTrue(
+                apply_plan(plan, state, dry_run=False, yes=True, extra_bases=[hub])["ok"]
+            )
             register = hub / "register" / "projects.yaml"
             register.write_text(
                 "schema: register/v1\nkind: projects\nupdated: '2026/1/5'\n",
@@ -229,14 +242,7 @@ class PlanSchemaTests(unittest.TestCase):
             [
                 op_mkdir(Path("/tmp/schema-check/kb")),
                 op_write(Path("/tmp/schema-check/kb/README.md"), "# Index\n"),
-                op_move(
-                    Path("/tmp/schema-check/a.md"),
-                    Path("/tmp/schema-check/kb/a.md"),
-                    pointer={
-                        "path": "/tmp/schema-check/a.md.moved.md",
-                        "content": "# Moved\n",
-                    },
-                ),
+                op_move(Path("/tmp/schema-check/a.md"), Path("/tmp/schema-check/kb/a.md")),
                 op_move(Path("/tmp/schema-check/b.md"), Path("/tmp/schema-check/kb/b.md")),
                 op_manual("notes.md", "Review the move", "CTX-09: contract check"),
             ],
@@ -247,11 +253,42 @@ class PlanSchemaTests(unittest.TestCase):
             sorted(op["kind"] for op in plan["operations"]),
             ["manual", "mkdir", "move", "move", "write"],
         )
+        for operation in plan["operations"]:
+            self.assertNotIn("pointer", operation)
         self.assertEqual(
             validate(plan, PLAN_SCHEMA),
             [],
             "a real build_plan result must satisfy plan.schema.json",
         )
+
+    def test_load_plan_validator_constants_match_plan_schema(self) -> None:
+        """planner's handwritten contract and plan.schema.json are one contract;
+        this fails the day someone edits only one of the two."""
+        self.assertEqual(PLAN_SCHEMA["required"], list(PLAN_TOP_REQUIRED))
+        self.assertEqual(sorted(PLAN_SCHEMA["properties"]), sorted(PLAN_TOP_REQUIRED))
+        self.assertIs(PLAN_SCHEMA["additionalProperties"], False)
+        variants = PLAN_SCHEMA["properties"]["operations"]["items"]["oneOf"]
+        self.assertEqual(
+            sorted(variant["properties"]["kind"]["enum"][0] for variant in variants),
+            sorted(PLAN_OPERATION_KINDS),
+        )
+        for variant in variants:
+            kind = variant["properties"]["kind"]["enum"][0]
+            with self.subTest(kind=kind):
+                fields = PLAN_OPERATION_FIELDS[kind]
+                self.assertEqual(
+                    variant["required"],
+                    ["kind"] + [field for field, _ in fields],
+                )
+                self.assertEqual(
+                    sorted(variant["properties"]),
+                    sorted(["kind"] + [field for field, _ in fields]),
+                )
+                self.assertIs(variant["additionalProperties"], False)
+                for field, non_empty in fields:
+                    spec = variant["properties"][field]
+                    if non_empty:
+                        self.assertEqual(spec.get("minLength"), 1)
 
     def test_plan_version_must_be_the_integer_one(self) -> None:
         for bad in ("1", 2, None):

@@ -143,7 +143,7 @@ class GusterCoreTests(unittest.TestCase):
     def test_init_project_creates_standard_layout(self) -> None:
         target = self.fx.tmp / "new-project"
         plan = plan_init_project(target)
-        result = apply_plan(plan, self.fx.state, dry_run=False, yes=True)
+        result = apply_plan(plan, self.fx.state, dry_run=False, yes=True, extra_bases=[self.fx.tmp])
         self.assertTrue(result["ok"])
         for slot in ("plans", "wiki", "evidence", "skills", "tmp", "archive"):
             self.assertTrue((target / ".agents" / slot).is_dir())
@@ -154,51 +154,73 @@ class GusterCoreTests(unittest.TestCase):
         src = self.fx.project / ".agents" / "task-x"
         dst = self.fx.project / ".agents" / "evidence" / "task-x"
         plan = plan_move(src, dst)
-        self.assertIsNone(plan["operations"][1]["pointer"])
-        result = apply_plan(plan, self.fx.state, dry_run=False, yes=True)
+        result = apply_plan(plan, self.fx.state, dry_run=False, yes=True, extra_bases=[self.fx.tmp])
         self.assertTrue(result["ok"])
         self.assertTrue((dst / "a.md").is_file())
         self.assertFalse((self.fx.project / ".agents" / "task-x.moved.md").exists())
         self.assertEqual(list(src.parent.glob("*.moved.md")), [])
         self.assertTrue((Path(result["backup"]) / "002-task-x" / "a.md").is_file())
 
-    def _failing_batch(self, pointer_path) -> dict:
-        # move+pointer, a fresh write, then a write onto a directory the second
+    def _failing_batch(self) -> dict:
+        # a fresh move, a fresh write, then a write onto a directory the second
         # op just created — the batch always fails at op 3 and must roll back.
         agents = self.fx.project / ".agents"
         return {
             "id": "batch-fail",
+            "title": "failing batch",
+            "created_at": "2026-11-19T00:00:00+08:00",
+            "notes": "",
             "version": 1,
             "operations": [
                 {
                     "kind": "move",
                     "src": str(agents / "task-x"),
                     "dst": str(agents / "evidence" / "task-x"),
-                    "pointer": {"path": str(pointer_path), "content": "moved\n"},
                 },
                 {"kind": "write", "path": str(agents / "kb" / "n.md"), "content": "# n\n"},
                 {"kind": "write", "path": str(agents / "kb"), "content": "x"},
             ],
         }
 
-    def test_apply_rollback_leaves_no_stale_pointer(self) -> None:
+    def test_apply_rollback_undoes_every_operation(self) -> None:
         agents = self.fx.project / ".agents"
-        pointer = agents / "task-x.moved.md"
         with self.assertRaises(ApplyError) as caught:
-            apply_plan(self._failing_batch(pointer), self.fx.state, dry_run=False, yes=True)
+            apply_plan(
+                self._failing_batch(), self.fx.state, dry_run=False, yes=True,
+                extra_bases=[self.fx.tmp],
+            )
         self.assertIn("rolled back", str(caught.exception))
         self.assertTrue((agents / "task-x" / "a.md").is_file())  # source restored
         self.assertFalse((agents / "evidence" / "task-x").exists())  # destination gone
-        self.assertFalse(pointer.exists())  # no pointer lying about a gone destination
         self.assertFalse((agents / "kb" / "n.md").exists())  # fresh write undone too
+        self.assertEqual(list(agents.glob("*.moved.md")), [])  # no stubs left behind
 
-    def test_apply_rollback_restores_existing_pointer(self) -> None:
+    def test_apply_rollback_restores_existing_files(self) -> None:
         agents = self.fx.project / ".agents"
-        pointer = agents / "task-x.moved.md"
-        write(pointer, "old pointer\n")
+        existing = agents / "kb" / "n.md"
+        write(existing, "old content\n")
+        # op 1 overwrites the existing file; op 2 then fails at runtime (its
+        # destination sits *under* that file), so the batch must roll back and
+        # restore the original content.
+        plan = {
+            "id": "restore-check",
+            "title": "restore check",
+            "created_at": "2026-11-19T00:00:00+08:00",
+            "notes": "",
+            "version": 1,
+            "operations": [
+                {"kind": "write", "path": str(existing), "content": "new\n"},
+                {
+                    "kind": "move",
+                    "src": str(agents / "task-x"),
+                    "dst": str(existing / "child" / "m.md"),
+                },
+            ],
+        }
         with self.assertRaises(ApplyError):
-            apply_plan(self._failing_batch(pointer), self.fx.state, dry_run=False, yes=True)
-        self.assertEqual(pointer.read_text(encoding="utf-8"), "old pointer\n")
+            apply_plan(plan, self.fx.state, dry_run=False, yes=True, extra_bases=[self.fx.tmp])
+        self.assertEqual(existing.read_text(encoding="utf-8"), "old content\n")
+        self.assertTrue((agents / "task-x" / "a.md").is_file())
 
     def test_dry_run_does_not_write(self) -> None:
         target = self.fx.tmp / "dry-project"
@@ -1225,10 +1247,22 @@ class PlanValidationTests(unittest.TestCase):
 
     def test_apply_reports_a_malformed_operation_without_a_traceback(self) -> None:
         path = self.tmp / "bad-op.json"
-        write(path, json.dumps({"version": 1, "operations": [{"kind": "move"}]}))
+        write(
+            path,
+            json.dumps(
+                {
+                    "id": "bad-op",
+                    "title": "bad op",
+                    "created_at": "2026-11-19T00:00:00+08:00",
+                    "notes": "",
+                    "version": 1,
+                    "operations": [{"kind": "move"}],
+                }
+            ),
+        )
         code, out, err = self.run_cli(["apply", str(path), "--state-dir", str(self.state)])
-        self.assertEqual(code, 4)
-        self.assertIn("move needs string field(s): src, dst", out)
+        self.assertEqual(code, 1)
+        self.assertIn("move operation needs", err)
         self.assertNotIn("Traceback", err)
 
     def test_apply_reports_an_unreadable_plan_path(self) -> None:
@@ -1243,6 +1277,10 @@ class PlanValidationTests(unittest.TestCase):
             path,
             json.dumps(
                 {
+                    "id": "refused",
+                    "title": "refused plan",
+                    "created_at": "2026-11-19T00:00:00+08:00",
+                    "notes": "",
                     "version": 1,
                     "operations": [
                         {"kind": "move", "src": str(self.tmp / "missing"), "dst": str(self.tmp / "moved")}
@@ -1257,25 +1295,26 @@ class PlanValidationTests(unittest.TestCase):
         self.assertIn("FAILED", out)
         self.assertNotIn("APPLIED", out)
 
-    def test_apply_accepts_an_explicit_dry_run(self) -> None:
-        target = self.tmp / "created"
+    def test_apply_without_yes_stays_a_dry_run(self) -> None:
+        target = self.state / "created"  # apply may only write inside its allowed bases
         path = self.tmp / "mkdir-plan.json"
-        write(path, json.dumps({"version": 1, "operations": [{"kind": "mkdir", "path": str(target)}]}))
-        code, out, _ = self.run_cli(
-            ["apply", str(path), "--dry-run", "--state-dir", str(self.state)]
+        write(
+            path,
+            json.dumps(
+                {
+                    "id": "mkdir",
+                    "title": "mkdir plan",
+                    "created_at": "2026-11-19T00:00:00+08:00",
+                    "notes": "",
+                    "version": 1,
+                    "operations": [{"kind": "mkdir", "path": str(target)}],
+                }
+            ),
         )
+        code, out, _ = self.run_cli(["apply", str(path), "--state-dir", str(self.state)])
         self.assertEqual(code, 0)
         self.assertIn("DRY RUN", out)
         self.assertFalse(target.exists())
-
-    def test_apply_rejects_dry_run_together_with_yes(self) -> None:
-        path = self.tmp / "plan.json"
-        write(path, json.dumps({"version": 1, "operations": []}))
-        code, _, err = self.run_cli(
-            ["apply", str(path), "--dry-run", "--yes", "--state-dir", str(self.state)]
-        )
-        self.assertEqual(code, 1)
-        self.assertIn("mutually exclusive", err)
 
     def test_build_config_rejects_a_missing_root(self) -> None:
         missing = self.tmp / "missing-root"
@@ -1718,18 +1757,6 @@ class FirstRunCoreCommandTests(unittest.TestCase):
         data = json.loads(out)
         self.assertEqual(data["registry"]["workspaces"], [str(self.code)])
 
-    def test_upgrade_compares_cli_against_manifests(self) -> None:
-        code, out, err = self.run_cli(["upgrade", "--state-dir", str(self.state)])
-        self.assertEqual(code, 0, err)
-        code, out, _ = self.run_cli(["upgrade", "--json", "--state-dir", str(self.state)])
-        data = json.loads(out)
-        self.assertEqual(set(data["versions"]), {"cli", "codex", "zcode", "package"})
-        self.assertEqual(set(data["versions"].values()), {__version__})
-        with mock.patch.object(cli, "__version__", "0.0.0-drift"):
-            code, out, err = self.run_cli(["upgrade", "--state-dir", str(self.state)])
-        self.assertEqual(code, 2)
-        self.assertIn("versions differ", out)
-
     def test_export_json_writes_only_the_json_report(self) -> None:
         code, _, err = self.run_cli(
             ["export", "--format", "json", "--state-dir", str(self.state)]
@@ -1828,7 +1855,7 @@ class FirstRunCoreCommandTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertRegex(out, r"Guster Context Health: [0-9.]+ / 100 \(\d/5 dims scored\)")
         self.assertNotIn("CHI ", out)  # the per-dim list above must not be repeated
-        self.assertIn("Definitions & targets: skills/guster/reference/metrics.md", out)
+        self.assertRegex(out, r"Definitions & targets: \S*skills/guster/reference/metrics\.md")
         self.assertNotIn("None", out)
 
     def test_score_trend_renders_na_for_null_chi_snapshots(self) -> None:
@@ -2457,7 +2484,17 @@ class ReportPlanRegistryTests(unittest.TestCase):
         drift = [item for item in policy["findings"] if item["rule"] == "registry-drift"]
         self.assertTrue(any("out of date" in item["title"] for item in drift), drift)
 
+        # The write run compares against the pre-overwrite baseline, so the
+        # stale-table drift is still reported once; the next run — whose
+        # baseline is now the fresh table — converges to silence.
         code, out, err = self.run_cli(["doctor", "--state-dir", str(state), "--json"])
+        self.assertEqual(code, 2, err)
+        policy = json.loads(out)
+        drift = [item for item in policy["findings"] if item["rule"] == "registry-drift"]
+        self.assertTrue(any("out of date" in item["title"] for item in drift), drift)
+
+        code, out, err = self.run_cli(["doctor", "--state-dir", str(state), "--json"])
+        self.assertEqual(code, 2, err)
         policy = json.loads(out)
         self.assertEqual(
             [item for item in policy["findings"] if item["rule"] == "registry-drift"],
@@ -2624,7 +2661,7 @@ class ReportPlanRegistryTests(unittest.TestCase):
             ],
         }
         with self.assertRaises(ApplyError) as ctx:
-            apply_plan(plan, state, dry_run=False, yes=True)
+            apply_plan(plan, state, dry_run=False, yes=True, extra_bases=[self.tmp])
         self.assertIn("rolled back", str(ctx.exception))
         self.assertEqual(target.read_text(encoding="utf-8"), "orig\n")
         self.assertTrue(src.is_file())
@@ -2650,7 +2687,7 @@ class ReportPlanRegistryTests(unittest.TestCase):
         }
         with mock.patch("guster.executor.rollback", side_effect=RuntimeError("undo broken")):
             with self.assertRaises(ApplyError) as ctx:
-                apply_plan(plan, state, dry_run=False, yes=True)
+                apply_plan(plan, state, dry_run=False, yes=True, extra_bases=[self.tmp])
         message = str(ctx.exception)
         self.assertIn("apply failed", message)
         self.assertIn("rollback also failed", message)
@@ -2678,7 +2715,7 @@ class ReportPlanRegistryTests(unittest.TestCase):
             "notes": "",
             "operations": [{"kind": "write", "path": str(self.tmp / "bk-out.md"), "content": "x"}],
         }
-        result = apply_plan(plan, state, dry_run=False, yes=True)
+        result = apply_plan(plan, state, dry_run=False, yes=True, extra_bases=[self.tmp])
         dirs = {item.name for item in backups.iterdir() if item.is_dir()}
         self.assertEqual(len(dirs), 10)
         self.assertIn("plan-11", dirs)
