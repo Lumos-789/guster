@@ -808,8 +808,6 @@ class GusterCoreTests(unittest.TestCase):
             "schema: register/v1\nkind: projects\nupdated: '2026-11-03'\n",
         )
         write(hub / "tools" / "README.md", "# Tools\n")
-        write(hub / "manuals" / "catalog.json", "{}\n")
-        write(hub / "cron-tasks" / "README.md", "# Cron\n")
         write(hub / "openspec" / "changes" / "x.md", "# Change\n")
         write(hub / "archive" / "old.md", "# Old\n")
         write(hub / "strategy.md", "# Strategy\n")
@@ -826,13 +824,13 @@ class GusterCoreTests(unittest.TestCase):
         registry = scan(config)
         rels = {item["rel"] for item in registry["artifacts"]}
         for rel in (
-            "manuals/catalog.json",
-            "cron-tasks/README.md",
-            "openspec/changes/x.md",
-            "archive/old.md",
+            "register/projects.yaml",
             "strategy.md",
         ):
             self.assertIn(rel, rels)
+        # Hub directories outside the documented sections are not scanned.
+        for rel in ("openspec/changes/x.md", "archive/old.md"):
+            self.assertNotIn(rel, rels)
 
     def test_state_freshness_uses_filename_date(self) -> None:
         hub = self.fx.tmp / "dated-hub"

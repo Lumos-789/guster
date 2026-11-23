@@ -139,7 +139,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 Under `hub.yaml` schema 2 the layout is declarative: `knowledge` and `projects` must be declared under `paths` — a missing declaration fails loud — while every other section (such as `tools`) is optional. Relative declarations stay inside the Hub; any section may instead be declared external (absolute or `~/`). Declarations are recorded in `hub.yaml` under `paths` and can be changed later.
 
-Scanning follows the directories that exist, not a mode: there is no `profile` concept in `hub.yaml` (a leftover key from an older version is ignored, as are unknown top-level manifest keys). Knowledge subzones are discovered, not enumerated — every first-level directory under the knowledge root (`general/`, `projects/`, `machines/`, ...) is scanned and index-checked. A hub is also scanned across the configured project state root, `register/`, `handoff/`, `reports/`, `output/`, `.agents/plans/` and `strategy.md` whenever those exist. Legacy layouts — `provision/`, `manuals/`, `cron-tasks/`, `openspec/`, `archive/` and the `Human Output/` alias of `output/` — are compat-scanned when present only; they are never structures to create. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
+Scanning follows the directories that exist, not a mode: there is no `profile` concept in `hub.yaml` (a leftover key from an older version is ignored, as are unknown top-level manifest keys). Knowledge subzones are discovered, not enumerated — every first-level directory under the knowledge root (`general/`, `projects/`, `machines/`, ...) is scanned and index-checked. A hub is also scanned across the configured project state root, `register/`, `handoff/`, `reports/`, `output/`, `.agents/plans/` and `strategy.md` whenever those exist; other hub directories are not scanned. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
 
 ## Health model
 
@@ -158,7 +158,7 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
   breakdown, so a low number says why instead of just being low.
 - **ICR** index coverage rate
 - **FRS** state freshness rate: share of state documents under the hub's
-  project root (`projects/`), `register/`, `handoff/`, `provision/` and
+  project root (`projects/`), `register/`, `handoff/` and
   `.agents/plans/` that were verified within the 90-day SLA. The denominator
   is those prefixes only — a hub `reports/` file or a machine-level note is
   not state.

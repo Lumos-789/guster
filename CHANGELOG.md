@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.6 — 2026-11-23
+
+- **Legacy hub layout names removed from the scanner.** The hub scan still
+  compat-scanned six directory names carried over from an early private layout —
+  `provision/`, `manuals/`, `cron-tasks/`, `openspec/`, `archive/` and the
+  `Human Output/` alias of `output/` — which no documented layout creates. The
+  scan now covers exactly the documented sections: the configured project state
+  root, `register/`, `handoff/`, `reports/`, `output/`, `.agents/plans/` and
+  `strategy.md`; other hub directories are not scanned. `provision/` also leaves
+  the FRS state prefixes, so the freshness denominator and the scan agree. A hub
+  that keeps content under one of the old names moves it under a documented
+  section (state documents: `register/` or the project state root).
+- Docs: the pointer-check skip rule is described by pattern (`draft-NNN.md`,
+  `report-YYYY-MM-DD.md`, `0X-xxx.md`) instead of one hub's file names.
+
 ## 0.9.5 — 2026-11-19
 
 - **apply/plan safety hardening**: plans are validated for schema

@@ -131,7 +131,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 `hub.yaml` schema 2 下布局是声明式的：`knowledge` 与 `projects` 必须在 `paths` 下显式声明——缺一个直接 fail-loud——其余节（如 `tools`）可选。相对声明必须留在 Hub 内；任何节都可以改声明为外部路径（绝对路径或 `~/`）。声明记录在 `hub.yaml` 的 `paths` 下，之后也可以修改。
 
-扫描按目录是否存在走，不是开关：`hub.yaml` 没有 `profile` 概念（旧版残留的键会被忽略，未知的 manifest 顶层键同样忽略）。knowledge 子区是动态发现的，不写死枚举——knowledge 根下任意一层目录（`general/`、`projects/`、`machines/`……）都会被扫描并做索引检查。Hub 只要有配置的项目状态根、`register/`、`handoff/`、`reports/`、`output/`、`.agents/plans/` 和 `strategy.md`，就会被扫到。旧结构——`provision/`、`manuals/`、`cron-tasks/`、`openspec/`、`archive/` 以及 `output/` 的旧别名 `Human Output/`——仅作兼容扫描（存在才扫），绝不是要新建的结构。`out/`、`.manual-site/`、`.playwright-mcp/`、`.codegraph/` 等生成物或运行态不作为知识源。`--scope hub` 只算 Hub；本地 wiki 和机器级凭据归机器范围。
+扫描按目录是否存在走，不是开关：`hub.yaml` 没有 `profile` 概念（旧版残留的键会被忽略，未知的 manifest 顶层键同样忽略）。knowledge 子区是动态发现的，不写死枚举——knowledge 根下任意一层目录（`general/`、`projects/`、`machines/`……）都会被扫描并做索引检查。Hub 只要有配置的项目状态根、`register/`、`handoff/`、`reports/`、`output/`、`.agents/plans/` 和 `strategy.md`，就会被扫到；其余 Hub 目录不扫。`out/`、`.manual-site/`、`.playwright-mcp/`、`.codegraph/` 等生成物或运行态不作为知识源。`--scope hub` 只算 Hub；本地 wiki 和机器级凭据归机器范围。
 
 ## 健康模型
 
@@ -146,8 +146,8 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
   分母只算 `.agents/` 目录本身 —— 从未采用该布局的仓库不计分，而「包含其他已扫描项目」
   的目录（工作区或组根）不算项目。报告会打出不合格原因分布，低分能自己解释为什么低。
 - **ICR** 索引覆盖率
-- **FRS** 状态新鲜度：Hub 项目目录（`projects/`）、`register/`、`handoff/`、
-  `provision/` 与 `.agents/plans/` 各前缀下状态文档中在 90 天 SLA 内核实过的
+- **FRS** 状态新鲜度：Hub 项目目录（`projects/`）、`register/`、`handoff/` 与
+  `.agents/plans/` 各前缀下状态文档中在 90 天 SLA 内核实过的
   比例；分母只认这些前缀，Hub `reports/` 或机器级笔记不算状态文档。日期取自前 40 行内的声明键——
   `verified_at`（canonical）、中文 `最后更新` 族或英文 `Last updated:`/`updated:`
   ——或文件名开头处的日期（`2026-11-05-…`、`20261105-…`）；都没有时依次兜底到

@@ -32,9 +32,9 @@ The standard skeleton — what `guster hub init` scaffolds:
 └── .agents/plans/   # local plans
 ```
 
-Optional state and evidence directories — `handoff/`, `reports/`, `output/`
-(legacy alias `Human Output/`) — are added when the workflow needs them, never
-by the scaffold; the scanner picks them up when present.
+Optional state and evidence directories — `handoff/`, `reports/`, `output/` —
+are added when the workflow needs them, never by the scaffold; the scanner
+picks them up when present.
 
 ## Project level
 

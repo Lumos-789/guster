@@ -814,7 +814,7 @@ def _check_state_freshness(
     state_docs_fresh_declared, state_docs_fresh_from_git,
     state_docs_fresh_from_mtime, git_probe_failures. Mutates git_failures."""
     findings: List[Dict[str, Any]] = []
-    state_prefixes = ["handoff/", "provision/", "register/", ".agents/plans/"]
+    state_prefixes = ["handoff/", "register/", ".agents/plans/"]
     if hub_layout:
         state_prefixes.append(relative(hub_layout["projects"], hub).rstrip("/") + "/")
     state_docs = [

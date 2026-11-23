@@ -655,14 +655,8 @@ def scan_hub_knowledge(
         (layout["projects"], "state", "state", "project", False, default_suffixes),
         (hub / "register", "state", "state", "project", False, default_suffixes),
         (hub / "handoff", "state", "state", "project", False, default_suffixes),
-        (hub / "provision", "state", "state", "project", False, default_suffixes),
         (hub / "reports", "evidence", "evidence", "project", False, default_suffixes),
         (hub / "output", "evidence", "evidence", "project", False, default_suffixes),
-        (hub / "Human Output", "evidence", "evidence", "project", False, default_suffixes),
-        (hub / "manuals", "state", "state", "project", False, default_suffixes),
-        (hub / "cron-tasks", "state", "state", "project", False, default_suffixes | {".plist"}),
-        (hub / "openspec", "plan", "state", "project", False, default_suffixes),
-        (hub / "archive", "archive", "archive", "project", False, default_suffixes),
         (hub / ".agents" / "plans", "plan", "state", "project", False, default_suffixes),
     ])
     for root, kind, plane, scope, check_index, suffixes in groups:

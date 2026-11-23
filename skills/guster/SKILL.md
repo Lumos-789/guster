@@ -35,8 +35,8 @@ Four levels. `--scope` is inferred from `--root` when omitted.
 - Group exposes cross-repo facts (same stem different content, duplicates);
   project shows only that repo plus how many machine findings were hidden.
 - Scoped runs write to `~/.agents/guster/scoped/<hash>/`, never the
-  machine-wide registry or trend. Pointer checks skip doc templates
-  (`draft-NNN.md`, `daily-*.md`, `0X-xxx.md`) and `~/` on `ssh`/`scp`/
+machine-wide registry or trend. Pointer checks skip template-shaped paths
+(`draft-NNN.md`, `report-YYYY-MM-DD.md`, `0X-xxx.md`) and `~/` on `ssh`/`scp`/
   `rsync` command lines.
 
 ## Workflow

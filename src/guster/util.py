@@ -719,7 +719,7 @@ def _looks_like_pointer(candidate: str) -> bool:
 def _is_placeholder(pointer: str) -> bool:
     if any(token in pointer for token in ("<", ">", "*", "{", "}", "$", "|")):
         return True
-    # File templates in docs: draft-NNN.md, daily-YYYY-MM-DD.md, 0X-xxx.md.
+    # Template-shaped paths in docs: draft-NNN.md, report-YYYY-MM-DD.md, 0X-xxx.md.
     return re.search(r"(?:N{2,}|Y{4}|X{3,}|x{3,}|0[xX][-_/])", pointer) is not None
 
 
