@@ -244,6 +244,20 @@ def do_scan(
     return registry, previous
 
 
+def registry_shape_error(data: Dict[str, Any]) -> Optional[str]:
+    """Why a parsed registry.json cannot be shown as-is; None when it can."""
+    for key, kind in (("plugin", dict), ("summary", dict), ("workspaces", list), ("zones", list)):
+        if key in data and not isinstance(data[key], kind):
+            return f"'{key}' is not a {kind.__name__}"
+    if any(not isinstance(item, str) for item in data.get("workspaces", [])):
+        return "'workspaces' must hold strings"
+    if any(not isinstance(item, dict) for item in data.get("zones", [])):
+        return "'zones' must hold objects"
+    if data.get("version") != 1:
+        return f"unsupported registry version {data.get('version')!r}"
+    return None
+
+
 def load_registry(config: ScanConfig) -> Optional[Dict[str, Any]]:
     """Cached registry; corrupt content warns and reads as absent so `status`
     rescans instead of silently self-healing."""
@@ -256,6 +270,13 @@ def load_registry(config: ScanConfig) -> Optional[Dict[str, Any]]:
         return None
     if not isinstance(data, dict):
         print(f"[guster] warning: {path} is not a JSON object; rescanning", file=sys.stderr)
+        return None
+    shape_error = registry_shape_error(data)
+    if shape_error is not None:
+        print(
+            f"[guster] warning: {path} has an unexpected shape ({shape_error}); rescanning",
+            file=sys.stderr,
+        )
         return None
     return data
 
@@ -376,6 +397,11 @@ def cmd_status(args: argparse.Namespace) -> int:
             "findings": None if policy_result is None else len(policy_result["findings"]),
             "scope": registry.get("scope"),
             "state_dir": str(config.state_dir),
+            # The onboarding facts a reader of the JSON form needs: declared
+            # zones, and whether the roots are configured or only probed.
+            "zones": registry.get("zones", []),
+            "unconfigured": bool(registry.get("unconfigured")),
+            "auto_roots": bool(registry.get("auto_roots")),
         }))
     else:
         print(render_status(registry, metric_result))
@@ -808,6 +834,8 @@ def cmd_zones(args: argparse.Namespace) -> int:
         return 0
 
     zone_path = Path(args.path).expanduser()
+    if not zone_path.is_absolute():
+        raise ValueError(f"zone path must be an absolute path: {args.path!r}")
     raw_zones = config.get("zones", [])
     if not isinstance(raw_zones, list):
         raise ValueError(f"Guster config 'zones' must be a list: {config_path}")
@@ -895,7 +923,11 @@ def cmd_credentials(args: argparse.Namespace) -> int:
     for entry in entries:
         scopes.setdefault(entry.get("scope", "unknown"), []).append(entry)
     if args.json:
-        print(json_dumps({"path": info.get("path"), "entries": entries}))
+        print(json_dumps({
+            "path": info.get("path"),
+            "entries": entries,
+            "parse_warnings": info.get("parse_warnings") or [],
+        }))
         return 0
     if not args.quiet:
         print(f"registry: {info.get('path') or '(missing)'}")

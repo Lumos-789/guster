@@ -440,7 +440,7 @@ def parse_register_rows(text: str) -> List[Dict[str, str]]:
         elif key == "spec" and raw == "":
             in_spec = True
         elif key == "spec" and raw.startswith("{"):
-            inline = re.search(r"(?:^|,)\s*path\s*:\s*([^,}]+)", raw)
+            inline = re.search(r"[{,]\s*path\s*:\s*([^,}]+)", raw)
             if inline:
                 current["path"] = _scalar(inline.group(1))
         elif raw and key in ("status", "as_of", "name"):

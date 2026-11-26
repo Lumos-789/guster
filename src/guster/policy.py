@@ -16,6 +16,7 @@ from .util import (
     extract_naked_pointers,
     extract_pointers,
     git_last_commit_dates,
+    has_flow_style_rows,
     has_top_level_row_keys,
     is_under,
     load_json_strict,
@@ -323,10 +324,35 @@ def run_policy(
         stats["waived_findings"] = len(waived)
         findings = kept
 
+    # Caps come last so they count what is really shown: a waived or
+    # out-of-scope finding never pushes a real one past the limit.
+    for rule, limit in FINDING_CAPS:
+        findings = _cap_rule(findings, rule, limit)
+
     findings.sort(key=lambda item: (SEVERITY_ORDER.get(item["severity"], 9), item["rule"], item["path"]))
     for index, item in enumerate(findings, start=1):
         item["id"] = f"F{index:04d}"
     return {"findings": findings, "waived": waived, "stats": stats}
+
+
+# Rules reported per file; beyond the limit one notice names the rest.
+FINDING_CAPS = (("secret-in-git", 20), ("broken-pointer", 100), ("naked-pointer", 100))
+
+
+def _cap_rule(findings: List[Dict[str, Any]], rule: str, limit: int) -> List[Dict[str, Any]]:
+    mine = [item for item in findings if item["rule"] == rule]
+    if len(mine) <= limit:
+        return findings
+    notice = finding(
+        "finding-cap",
+        "info",
+        f"Only the first {limit} {rule} findings are listed",
+        mine[limit]["path"],
+        f"{len(mine)} {rule} finding(s) exist; {len(mine) - limit} are not listed individually.",
+        "Fix the listed ones first, then re-run: the rest appears as they clear.",
+        {"rule": rule, "total": len(mine), "listed": limit},
+    )
+    return [item for item in findings if item["rule"] != rule] + mine[:limit] + [notice]
 
 
 def _check_resident_budget(
@@ -899,9 +925,9 @@ def _check_state_freshness(
                 "medium",
                 "State documents are older than 90 days",
                 stale_old[0][0],
-                f"{len(stale_old)} state document(s) are older than the 90-day SLA.",
-                "Re-verify against git/runtime and update verified_at, or archive the document.",
-                {"count": len(stale_old), "examples": stale_old[:10]},
+                    f"{len(stale_old)} state document(s) are older than the 90-day SLA.",
+                    "Re-verify against git/runtime and update verified_at, or archive the document.",
+                    {"count": len(stale_old), "examples": [path for path, _ in stale_old[:10]]},
             )
         )
     stats["git_probe_failures"] = len(git_failures)
@@ -1010,8 +1036,8 @@ def _check_pointers(
                     {"paths": naked[:10]},
                 )
             )
-    findings.extend(broken_by_file[:100])
-    findings.extend(naked_by_file[:100])
+    findings.extend(broken_by_file)
+    findings.extend(naked_by_file)
     return findings
 
 
@@ -1060,17 +1086,17 @@ def _check_secrets(
                     continue
     tracked = [item for item in secret_files if item.get("git_tracked")]
     stats["secret_in_git"] = len(tracked)
-    for item in tracked[:20]:
-        findings.append(
-            finding(
-                "secret-in-git",
-                "critical",
-                "Credential file is tracked by git",
-                item["path"],
-                "A credential-bearing file is tracked; this must be removed from the index and history, not just deleted.",
-                "Stop, rotate the credential, remove it from the index/history, and add an ignore rule.",
-            )
+    findings.extend(
+        finding(
+            "secret-in-git",
+            "critical",
+            "Credential file is tracked by git",
+            item["path"],
+            "A credential-bearing file is tracked; this must be removed from the index and history, not just deleted.",
+            "Stop, rotate the credential, remove it from the index/history, and add an ignore rule.",
         )
+        for item in tracked
+    )
     outside_undeclared = []
     for item in outside:
         try:
@@ -1356,6 +1382,10 @@ def _check_registry_drift(
             format_issues.append(
                 "no project rows parsed — expected top-level `- id:` list items under `projects:`"
             )
+        if has_flow_style_rows(register_text):
+            format_issues.append(
+                "flow-style rows (`- {id: ...}`) are not read; write one `- id:` list item per row"
+            )
         seen_ids: Dict[str, int] = {}
         for row in register_rows:
             row_id = row.get("id") or ""
@@ -1410,8 +1440,8 @@ def _check_registry_drift(
                     "Register rows are outside the machine scan",
                     register_display,
                     f"{len(unscanned_rows)} registered path(s) exist but the scan never records them; "
-                    "the machine table cannot see what the register claims.",
-                    "Add the containing directory to the configured roots (guster init/zones), or fix the row path.",
+                "the machine table cannot see what the register claims.",
+                "Add the containing directory to the configured roots (`guster init --root <dir>`), or fix the row path.",
                     {"count": len(unscanned_rows), "rows": unscanned_rows[:10]},
                 )
             )
