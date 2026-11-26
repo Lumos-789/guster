@@ -61,7 +61,7 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster plan findings` | Turn findings into a review checklist |
 | `guster plan move` | Plan a move with backup (no pointer is written) |
 | `guster apply <plan>` | Dry-run by default; `--yes` writes with backup |
-| `guster init` | Initialize the state home or a project |
+| `guster init` | Initialize the state home or a project; `--root <dir>` adds a workspace root to an existing config |
 | `guster hub init` | Create a lite Hub and attach it to the local config |
 | `guster hub attach` | Attach an existing Hub without copying its content |
 | `guster hub status` | Show the Hub manifest and contract checks |
@@ -85,6 +85,10 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 - **`roots`** — the workspace roots scanned for git repositories. Must be a
   list of existing absolute paths; a bare string, an empty list, a relative
   path or a missing directory fails loud instead of being reinterpreted.
+  `guster init --root <dir>` on an initialized machine adds the directory to
+  this list (deduplicated by resolved path, so `~/code` and its absolute
+  spelling are one root); the other keys and the spelling of existing roots
+  are untouched.
 - **`hub`** — the attached Guster Hub path (written by `hub init`/`hub attach`).
 - **`scan_max_depth`** — how deep under each root the scanner walks looking
   for git repositories (default 5). Raise it for deeply nested layouts, lower
@@ -92,8 +96,10 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 - **`zones`** — tool areas that are not repositories: a tools directory you
   want governed without pretending each tool is a project. A zone is scanned
   light-style: its `AGENTS.md`/`README.md` entry docs join the pointer and
-  freshness checks, its `.env` files join the secret scan, and `.agents/`
-  slot compliance never applies. An entry is `{path}` only; extra keys a
+  freshness checks, its `.env` files and variants (`.env.local`,
+  `.env.production`, ...; `example`/`sample`/`template`/`dist` placeholders
+  excepted) join the secret scan, and `.agents/` slot compliance never
+  applies. An entry is `{path}` only; extra keys a
   legacy config may still carry (e.g. a retired `profile`) are tolerated
   and ignored.
 
@@ -139,7 +145,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 Under `hub.yaml` schema 2 the layout is declarative: `knowledge` and `projects` must be declared under `paths` — a missing declaration fails loud — while every other section (such as `tools`) is optional. Relative declarations stay inside the Hub; any section may instead be declared external (absolute or `~/`). Declarations are recorded in `hub.yaml` under `paths` and can be changed later.
 
-Scanning follows the directories that exist, not a mode: there is no `profile` concept in `hub.yaml` (a leftover key from an older version is ignored, as are unknown top-level manifest keys). Knowledge subzones are discovered, not enumerated — every first-level directory under the knowledge root (`general/`, `projects/`, `machines/`, ...) is scanned and index-checked. A hub is also scanned across the configured project state root, `register/`, `handoff/`, `reports/`, `output/`, `.agents/plans/` and `strategy.md` whenever those exist; other hub directories are not scanned. Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
+Scanning follows the directories that exist, not a mode: there is no `profile` concept in `hub.yaml` (a leftover key from an older version is ignored, as are unknown top-level manifest keys). Knowledge subzones are discovered, not enumerated — every first-level directory under the knowledge root (`general/`, `projects/`, `machines/`, ...) is scanned and index-checked. A hub is also scanned across the configured project state root, `register/`, `handoff/`, `reports/`, `output/`, `.agents/plans/` and `strategy.md` whenever those exist; other hub directories are not scanned. A repository checked out inside a hub section is a project, not hub content: the walk stops at its git root, so audit it by adding its parent directory as a root (`guster init --root <dir>`). Generated or runtime areas such as `out/`, `.manual-site/`, `.playwright-mcp/` and `.codegraph/` are not treated as knowledge sources. `--scope hub` is Hub-only; local wiki and machine-level secrets belong to the machine scope.
 
 ## Health model
 
@@ -242,7 +248,7 @@ counts toward a denominator only when a finding about it could also appear in
 that scope. `project` and `group` runs therefore drop hub knowledge, hub state
 documents and the machine-level local wiki from ICR/FRS/PHR unless they live
 under one of the given roots; the report table shows exactly the dimensions that
-enter CHI, and any extra value is labeled `Not counted in CHI`. A dimension with
+enter CHI and omits the others. A dimension with
 no in-scope artifacts stays vacuous (`0/0` in the raw column, `n/a` score) instead
 of borrowing health from out-of-scope files. This changes CHI for `project` and
 `group` scopes; hub health keeps being reported by `--scope hub` and the
@@ -290,7 +296,7 @@ required, `keys`/`used_by`/`status` are optional):
 
 ## Safety
 
-- Read-only on your workspace by default. `apply --yes`, `init --yes`, `hub init --yes` and `hub attach` are the only commands that change workspace files or Guster config on their own; `export` always writes one report file — `<state-dir>/context-health.md` by default, or the path you name with `--out`. `--format json` writes only the `.json` report (no Markdown).
+- Read-only on your workspace by default. `apply --yes`, `init --yes` (including the config write that adds a root), `hub init --yes`, `hub attach` and `zones add`/`zones remove` are the only commands that change workspace files or Guster config on their own; `export` always writes one report file — `<state-dir>/context-health.md` by default, or the path you name with `--out`. `--format json` writes only the `.json` report (no Markdown).
 - Guster keeps five files under its state directory (`~/.agents/guster/`, or `scoped/<hash>/`): `config.json` (roots/zones/hub, written by `init`, `hub init`/`attach` and `zones`), `registry.json`, which every scanning command rewrites (`status` included, when no registry exists yet), `findings.json` from `doctor`, `metrics.jsonl` from `score`, and the transient `.lock` that serializes concurrent runs. `--no-write` suppresses the state writes of `scan`, `doctor`, `score` and `check` only. (`plans/` and `backups/` are directories, not files.)
 - Credential values are never persisted or printed; scans keep only paths and redacted shapes.
 - No automatic `git add`, `commit`, `push` or deploy.

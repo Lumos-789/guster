@@ -36,8 +36,11 @@ Four levels. `--scope` is inferred from `--root` when omitted.
   project shows only that repo plus how many machine findings were hidden.
 - Scoped runs write to `~/.agents/guster/scoped/<hash>/`, never the
 machine-wide registry or trend. Pointer checks skip template-shaped paths
-(`draft-NNN.md`, `report-YYYY-MM-DD.md`, `0X-xxx.md`) and `~/` on `ssh`/`scp`/
+  (`draft-NNN.md`, `report-YYYY-MM-DD.md`, `0X-xxx.md`) and `~/` on `ssh`/`scp`/
   `rsync` command lines.
+- A repository checked out inside a hub section or under another project is
+  not part of it: the scan stops at its git root. Audit it as a project by
+  adding its parent directory as a root (`guster init --root <dir>`).
 
 ## Workflow
 
@@ -66,7 +69,7 @@ guster zones list|add <dir>|remove <dir>
 guster plan findings
 guster plan move --from <src> --to <dst>
 guster apply <plan> --yes
-guster init
+guster init [--root <dir>]             # --root adds a root to an existing config
 guster init --project <path> --yes
 guster hub init --path <hub> --yes
 guster hub attach|status|validate

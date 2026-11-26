@@ -28,13 +28,12 @@ The standard skeleton — what `guster hub init` scaffolds:
 │   ├── README.md    # knowledge index
 │   ├── general/     # starter note + knowledge/v1 skeleton; subzones are discovered, not fixed
 │   └── projects/    # empty starter subzone
-├── tools/           # capability — index only, no tool preinstalled
-└── .agents/plans/   # local plans
+└── tools/           # capability — index only, no tool preinstalled
 ```
 
-Optional state and evidence directories — `handoff/`, `reports/`, `output/` —
-are added when the workflow needs them, never by the scaffold; the scanner
-picks them up when present.
+Optional state and evidence directories — `handoff/`, `reports/`, `output/`
+and the git-ignored `.agents/plans/` — are added when the workflow needs
+them, never by the scaffold; the scanner picks them up when present.
 
 ## Project level
 

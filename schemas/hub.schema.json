@@ -29,7 +29,7 @@
       "type": "string"
     },
     "governance_docs": {
-      "description": "File names this hub counts as primary context-governance framework docs, looked up under the hub knowledge/general and ~/.agents/wiki. Absent or empty means GCR is reported as n/a instead of measured.",
+      "description": "File names this hub counts as primary context-governance framework docs, looked up under the hub knowledge/general and ~/.agents/wiki. Absent or empty means no governance-document count is reported.",
       "type": "array",
       "items": {
         "type": "string",

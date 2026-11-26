@@ -60,6 +60,10 @@ path. Conventions that keep the three-way diff (machine table `registry.json`
 - Unknown row keys and `spec` subkeys (owner, repo, priority, tags, ...) are
   ignored and never validated; the vocabulary only grows — semantics change
   only on a spec_version bump.
+- Rows are written one `- id:` list item per line. Block-style lists under any
+  key (`aliases:` with indented `- name` lines) are fine wherever they sit in
+  the row; a flow-style row (`- {id: ...}`) is not read and raises
+  `registry-format`.
 - A row whose path does not exist on disk is a dead row (`registry-drift`,
   medium); a row that exists but is never scanned points outside the
   configured roots (medium); a scanned project with no row is unregistered
@@ -129,7 +133,8 @@ with its header plus at least one row to enable them:
 | 9 | status | no |
 
 A pipe row with fewer than the six required columns is a parse warning, not
-silence; `guster credentials` prints it.
+silence; `guster credentials` prints it. Backticks around a cell are
+formatting and are ignored.
 
 ## Why a format contract
 

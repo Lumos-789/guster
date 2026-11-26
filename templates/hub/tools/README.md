@@ -1,6 +1,6 @@
 # Tools
 
-This is the index for manual tools in this hub. The Lite profile ships no tool by default; add one only when it earns a place.
+This is the index for manual tools in this hub. The lite hub ships no tool by default; add one only when it earns a place.
 
 ## What belongs here
 

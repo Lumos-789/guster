@@ -59,7 +59,7 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
 | `guster plan findings` | 把发现转成审阅清单 |
 | `guster plan move` | 计划一次带备份的移动（不再自动写指针） |
 | `guster apply <plan>` | 默认 dry-run；`--yes` 才写入 |
-| `guster init` | 初始化状态目录或项目布局 |
+| `guster init` | 初始化状态目录或项目布局；`--root <dir>` 向已有配置追加扫描根 |
 | `guster hub init` | 创建 Lite Hub 并接入本地配置 |
 | `guster hub attach` | 接入已有 Hub，不复制其内容 |
 | `guster hub status` | 查看 Hub manifest 和契约检查 |
@@ -87,7 +87,9 @@ ln -s "$(pwd)/bin/guster" ~/.local/bin/guster
   嵌套深的布局可以调大，巨大的目录树可以调小加速。
 - **`zones`** —— 不是仓库的工具区：想让一个工具目录被治理、又不必把每个工具
   当成项目。zone 按 light 方式扫描：其 `AGENTS.md`/`README.md` 入口文档进指针
-  与新鲜度检查，`.env` 进密钥扫描，`.agents/` 六槽合规永不适用。条目只认
+  与新鲜度检查，`.env` 及其变体（`.env.local`、`.env.production` 等；
+  `example`/`sample`/`template`/`dist` 占位文件除外）进密钥扫描，`.agents/`
+  六槽合规永不适用。条目只认
   `{path}`；旧配置可能残留的多余键（如已退役的 `profile`）容忍并忽略。
 
 zone 用 `zones` 子命令管理（`list`、`add <dir>`、`remove <dir>`），
@@ -97,6 +99,10 @@ zone 用 `zones` 子命令管理（`list`、`add <dir>`、`remove <dir>`），
 `~/src`。命中即照常扫描并打「未配置」横幅提示跑 `guster init` 固定；一个都
 没有则 fail-loud（退出码 1）并指路 `guster init --root <path>`。绝不静默扫
 整个 home 目录。
+
+**已初始化的机器**：`guster init --root <path>` 是追加——新目录并入 `roots`
+（按解析后的路径去重，`~/code` 与其绝对写法算同一个根），其余键和既有根的
+写法原样保留。
 
 ## Lite Hub
 
@@ -131,7 +137,7 @@ guster hub init --path <hub> --knowledge notes --projects work --tools scripts -
 
 `hub.yaml` schema 2 下布局是声明式的：`knowledge` 与 `projects` 必须在 `paths` 下显式声明——缺一个直接 fail-loud——其余节（如 `tools`）可选。相对声明必须留在 Hub 内；任何节都可以改声明为外部路径（绝对路径或 `~/`）。声明记录在 `hub.yaml` 的 `paths` 下，之后也可以修改。
 
-扫描按目录是否存在走，不是开关：`hub.yaml` 没有 `profile` 概念（旧版残留的键会被忽略，未知的 manifest 顶层键同样忽略）。knowledge 子区是动态发现的，不写死枚举——knowledge 根下任意一层目录（`general/`、`projects/`、`machines/`……）都会被扫描并做索引检查。Hub 只要有配置的项目状态根、`register/`、`handoff/`、`reports/`、`output/`、`.agents/plans/` 和 `strategy.md`，就会被扫到；其余 Hub 目录不扫。`out/`、`.manual-site/`、`.playwright-mcp/`、`.codegraph/` 等生成物或运行态不作为知识源。`--scope hub` 只算 Hub；本地 wiki 和机器级凭据归机器范围。
+扫描按目录是否存在走，不是开关：`hub.yaml` 没有 `profile` 概念（旧版残留的键会被忽略，未知的 manifest 顶层键同样忽略）。knowledge 子区是动态发现的，不写死枚举——knowledge 根下任意一层目录（`general/`、`projects/`、`machines/`……）都会被扫描并做索引检查。Hub 只要有配置的项目状态根、`register/`、`handoff/`、`reports/`、`output/`、`.agents/plans/` 和 `strategy.md`，就会被扫到；其余 Hub 目录不扫。检出在 Hub 分区里的仓库算项目、不算 Hub 内容：遍历到它的 git 根即止，要审计它就把其上级目录加为扫描根（`guster init --root <dir>`）。`out/`、`.manual-site/`、`.playwright-mcp/`、`.codegraph/` 等生成物或运行态不作为知识源。`--scope hub` 只算 Hub；本地 wiki 和机器级凭据归机器范围。
 
 ## 健康模型
 
@@ -191,7 +197,7 @@ CHI = 0.20 SSR + 0.15 RBR + 0.15 PCR + 0.15 ICR
 
 带范围的运行写入 `~/.agents/guster/scoped/<hash>/`。
 
-每个带范围的运行对报告两侧使用同一条边界：一个 artifact 只有在「针对它的 finding 也能出现在该 scope」时，才计入分母。因此 `project` / `group` 运行会把 Hub 知识、Hub 状态文档和机器级本地 wiki 从 ICR/FRS/PHR 分母中剔除，除非它们就在给定 root 之下；报告表格只列真正进入 CHI 的维度，额外展示的数值必须标注 `Not counted in CHI`。某个维度在该 scope 内没有 artifact 时保持空集口径（Raw 列显示 `0/0`，得分 `n/a`），而不是借用 scope 外文件的健康度。这会改变 `project` / `group` 的 CHI；Hub 健康度仍由 `--scope hub` 和全机运行报告。空维度被剔除后权重在剩余维度上归一，因此覆盖度不同的 scope 之间 CHI 不可横向比较。
+每个带范围的运行对报告两侧使用同一条边界：一个 artifact 只有在「针对它的 finding 也能出现在该 scope」时，才计入分母。因此 `project` / `group` 运行会把 Hub 知识、Hub 状态文档和机器级本地 wiki 从 ICR/FRS/PHR 分母中剔除，除非它们就在给定 root 之下；报告表格只列真正进入 CHI 的维度，其余维度不展示。某个维度在该 scope 内没有 artifact 时保持空集口径（Raw 列显示 `0/0`，得分 `n/a`），而不是借用 scope 外文件的健康度。这会改变 `project` / `group` 的 CHI；Hub 健康度仍由 `--scope hub` 和全机运行报告。空维度被剔除后权重在剩余维度上归一，因此覆盖度不同的 scope 之间 CHI 不可横向比较。
 
 ## 凭据登记
 
@@ -224,7 +230,7 @@ Guster 读取 `~/.agents/credentials/registry.md`，并对照它检查发现的�
 
 ## 安全边界
 
-- 默认不写工作区：只有 `apply --yes`、`init --yes`、`hub init --yes` 和 `hub attach` 会自行改动工作区文件或 Guster 配置；`export` 总会写一个报告文件——默认 `<state-dir>/context-health.md`，或 `--out` 指定的路径；`--format json` 只写 `.json` 报告（不再同时写 Markdown）。
+- 默认不写工作区：只有 `apply --yes`、`init --yes`（含追加 root 时的配置写入）、`hub init --yes`、`hub attach` 和 `zones add`/`zones remove` 会自行改动工作区文件或 Guster 配置；`export` 总会写一个报告文件——默认 `<state-dir>/context-health.md`，或 `--out` 指定的路径；`--format json` 只写 `.json` 报告（不再同时写 Markdown）。
 - Guster 会在状态目录（`~/.agents/guster/` 或 `scoped/<hash>/`）维护五个文件：`config.json`（roots/zones/hub，由 `init`、`hub init`/`attach` 和 `zones` 写入）、所有扫描类命令都会重写的 `registry.json`（`status` 在没有 registry 时也会写）、`doctor` 的 `findings.json`、`score` 的 `metrics.jsonl`，以及串行化并发运行的临时 `.lock`。`--no-write` 只对 `scan`、`doctor`、`score`、`check` 关闭本命令的状态写入。（`plans/` 与 `backups/` 是目录，不算文件。）
 - 永不持久化或输出凭据值；扫描只保留路径和脱敏形态。
 - 不自动 `git add` / `commit` / `push` / 部署。
