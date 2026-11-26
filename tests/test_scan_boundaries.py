@@ -263,6 +263,26 @@ class RegistryCellTests(Sandbox):
         self.assertEqual(policy["stats"]["secret_undeclared_outside"], 0)
 
 
+class ProjectInstructionBoundaryTests(Sandbox):
+    """A project's instruction-file walk stops at a nested repository: its
+    AGENTS.md belongs to that repository, not to the one enclosing it."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.outer = self.workspace / "outer-repo"
+        make_repo(self.outer)
+        write(self.outer / "AGENTS.md", "# Outer\n")
+        write(self.outer / "packages" / "plain" / "AGENTS.md", "# plain submodule directory\n")
+        nested = self.outer / "vendor" / "nested-repo"
+        make_repo(nested)
+        write(nested / "AGENTS.md", "# Nested\n")
+
+    def test_nested_repository_instruction_files_are_not_the_outer_projects(self) -> None:
+        registry = scan(self.config())
+        outer = next(project for project in registry["projects"] if project["id"] == "outer-repo")
+        self.assertEqual(outer["agent_files"], ["AGENTS.md", "packages/plain/AGENTS.md"])
+
+
 class ExtraSkillRootTests(Sandbox):
     def test_a_relative_host_directory_fails_loud(self) -> None:
         from guster.discover import extra_skill_roots

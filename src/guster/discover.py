@@ -470,7 +470,13 @@ def find_agent_files(root: Path, max_depth: int = 3) -> List[Path]:
         depth = len(current_path.resolve().parts) - root_depth
         if depth >= max_depth:
             dirs[:] = []
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".git"))
+        # A nested repository owns its own instruction files; they are found
+        # when that repository is scanned as a project, never as this one's.
+        dirs[:] = sorted(
+            d
+            for d in dirs
+            if d not in EXCLUDE_DIRS and not d.startswith(".git") and not is_git_root(current_path / d)
+        )
         for name in ("AGENTS.md", "CLAUDE.md"):
             candidate = current_path / name
             if candidate.is_file() and candidate not in results:
