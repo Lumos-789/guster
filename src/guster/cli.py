@@ -335,6 +335,17 @@ def print_scan_summary(registry: Dict[str, Any], config: ScanConfig) -> None:
     print(f"  registry:   {config.state_dir / 'registry.json'}")
 
 
+def print_counts(result: Dict[str, Any]) -> None:
+    """Apply and skip counts; a dry run says what it would do, never "applied"."""
+    applied, skipped = result.get("applied", 0), result.get("skipped", 0)
+    if result.get("dry_run"):
+        print(f"  would apply: {applied}")
+        print(f"  manual (skipped): {skipped}")
+    else:
+        print(f"  applied: {applied}")
+        print(f"  skipped: {skipped}")
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     config = build_config(args)
     registry = load_registry(config)
@@ -563,8 +574,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
         else:
             mode = "FAILED"
         print(f"{mode}: {result.get('plan')}")
-        print(f"  applied: {result.get('applied', 0)}")
-        print(f"  skipped: {result.get('skipped', 0)}")
+        print_counts(result)
         if result.get("backup"):
             print(f"  backup:  {result['backup']}")
         if result.get("errors"):
@@ -606,6 +616,7 @@ def cmd_init(args: argparse.Namespace) -> int:
                         print(f"  {index}. write {operation['path']}")
     else:
         explicit_roots = cli_roots(args.root)
+        requested_roots = bool(explicit_roots)
         result = init_home(
             state_dir,
             yes=args.yes,
@@ -633,6 +644,13 @@ def cmd_init(args: argparse.Namespace) -> int:
         else:
             print(f"  applied: {result.get('applied', 0)}")
             print(f"  skipped: {result.get('skipped', 0)}")
+        if not args.project:
+            added = result.get("added_roots") or []
+            if added:
+                label = "would add roots" if result.get("dry_run") else "added roots"
+                print(f"  {label}: {', '.join(added)}")
+            elif requested_roots:
+                print("  roots: already configured")
         if result.get("errors"):
             for error in result["errors"]:
                 print(f"  error: {error}")
@@ -707,8 +725,7 @@ def cmd_hub(args: argparse.Namespace) -> int:
                 mode = "FAILED"
             print(f"{mode}: hub {result['hub']}")
             print(f"  plan:     {result.get('plan')}")
-            print(f"  applied:  {result.get('applied', 0)}")
-            print(f"  skipped:  {result.get('skipped', 0)}")
+            print_counts(result)
             if result.get("attach"):
                 print(f"  config:   {result['attach']['config']}")
             paths = result.get("paths") or {}
@@ -850,11 +867,18 @@ def cmd_export(args: argparse.Namespace) -> int:
     out = Path(args.out).expanduser() if args.out else config.state_dir / "context-health.md"
     if args.format == "json":
         out = out.with_suffix(".json")
-        save_json(out, {
-            "registry": redacted_registry(registry),
-            "policy": result["policy"],
-            "metrics": result["metrics"],
-        })
+        # A report is written to be shared: the umask default, not the 0600 of state.
+        write_text(
+            out,
+            json_dumps(
+                {
+                    "registry": redacted_registry(registry),
+                    "policy": result["policy"],
+                    "metrics": result["metrics"],
+                }
+            )
+            + "\n",
+        )
     else:
         write_text(out, render_report(registry, result["policy"], result["metrics"]))
     if not args.quiet:

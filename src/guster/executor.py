@@ -129,6 +129,17 @@ def _outside_error(
     )
 
 
+def _missing_dirs(path: Path) -> List[Path]:
+    """The not-yet-existing directories from `path` up to the nearest existing
+    ancestor, nearest first."""
+    missing: List[Path] = []
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        missing.append(probe)
+        probe = probe.parent
+    return missing
+
+
 def preflight(
     plan: Dict[str, Any],
     bases: Optional[Sequence[Path]] = None,
@@ -260,15 +271,11 @@ def apply_plan(
                 late = _outside_error(index, kind, "path", path, bases)
                 if late:
                     raise ApplyError(late)
-                created: List[Path] = []
-                probe = path
-                while not probe.exists() and probe != probe.parent:
-                    created.append(probe)
-                    probe = probe.parent
+                created = _missing_dirs(path)
                 path.mkdir(parents=True, exist_ok=True)
+                # Reversed undo must rmdir the deepest level first, so the
+                # shallowest created level is appended last.
                 for fresh in reversed(created):
-                    # Reversed undo must rmdir the deepest level first, so the
-                    # shallowest created level is appended last.
                     undo.append(("mkdir", {"path": str(fresh)}))
                 applied += 1
             elif kind == "move":
@@ -283,8 +290,13 @@ def apply_plan(
                     shutil.copytree(src, backup)
                 else:
                     shutil.copy2(src, backup)
-                undo.append(("move", {"src": str(src), "dst": str(dst), "backup": str(backup)}))
+                created = _missing_dirs(dst.parent)
                 dst.parent.mkdir(parents=True, exist_ok=True)
+                # Recorded ahead of the move: reversed undo restores the source
+                # first, then removes the parents it leaves empty.
+                for fresh in reversed(created):
+                    undo.append(("mkdir", {"path": str(fresh)}))
+                undo.append(("move", {"src": str(src), "dst": str(dst), "backup": str(backup)}))
                 shutil.move(str(src), str(dst))
                 applied += 1
             elif kind == "write":
@@ -379,12 +391,16 @@ def init_home(
     home: Optional[Path] = None,
     roots: Optional[List[Path]] = None,
 ) -> Dict[str, Any]:
+    """First run writes the config with the detected or given roots. On an
+    already-initialized machine `roots` are added to the configured ones, so
+    `init --root` is never a success-shaped no-op; a broken config still refuses."""
     operations = [
         {"kind": "mkdir", "path": str(state_dir)},
         {"kind": "mkdir", "path": str(state_dir / "plans")},
         {"kind": "mkdir", "path": str(state_dir / "backups")},
     ]
     config_path = state_dir / "config.json"
+    added: List[Path] = []
     if not config_path.exists():
         resolved_home = (home or Path.home()).expanduser().resolve()
         if roots is None:
@@ -400,6 +416,7 @@ def init_home(
             "roots": [str(root) for root in roots],
             "scan_max_depth": 5,
         }
+        added = list(roots)
         operations.append(
             {
                 "kind": "write",
@@ -431,6 +448,20 @@ def init_home(
                 f"config exists but invalid ({reason}); fix or remove {config_path} "
                 "then re-run `guster init --root <path>`"
             )
+        known = {str(Path(item).expanduser().resolve()) for item in data["roots"]}
+        added = [root for root in (roots or []) if str(root.resolve()) not in known]
+        if added:
+            # Other keys (scan_max_depth, hub, zones) and the spelling of the
+            # existing roots survive the merge.
+            merged = dict(data)
+            merged["roots"] = list(data["roots"]) + [str(root) for root in added]
+            operations.append(
+                {
+                    "kind": "write",
+                    "path": str(config_path),
+                    "content": json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
+                }
+            )
     plan = {
         "version": 1,
         # Same slug discipline as planner.new_plan_id so a saved init plan can
@@ -441,4 +472,6 @@ def init_home(
         "notes": "Creates the local state directory and default config.",
         "operations": operations,
     }
-    return apply_plan(plan, state_dir, dry_run=dry_run, yes=yes)
+    result = apply_plan(plan, state_dir, dry_run=dry_run, yes=yes)
+    result["added_roots"] = [str(root) for root in added]
+    return result

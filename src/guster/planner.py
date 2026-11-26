@@ -229,7 +229,9 @@ def _validate_plan(data: Dict[str, Any], path: Path) -> None:
                 continue
             if non_empty and not value:
                 problems.append(f"op {index}: {kind} {field} must be a non-empty string")
-            elif field in ("path", "src", "dst") and not Path(value).is_absolute():
+            elif kind != "manual" and field in ("path", "src", "dst") and not Path(value).is_absolute():
+                # A manual op is a checklist line, never executed: its path is
+                # free text, as schemas/plan.schema.json states.
                 problems.append(f"op {index}: {kind} {field} must be an absolute path: {value!r}")
     if problems:
         raise ValueError(
