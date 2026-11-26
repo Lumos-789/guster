@@ -13,6 +13,7 @@ from .util import (
     find_git_roots,
     first_heading,
     git_tracked,
+    is_git_root,
     is_indexed,
     is_under,
     iter_files,
@@ -66,13 +67,18 @@ INLINE_CONFIG_FILES = [
 INLINE_PATTERNS = [
     # Host configs carry tokens in more shapes than one: keep the detector
     # narrow enough to stay quiet, broad enough not to miss a literal key.
+    # The key pattern reads TOML/YAML (`api_key = "..."`) and JSON spelling
+    # alike (`"ACME_API_KEY": "..."`): an optional closing quote sits between
+    # the key and its separator, and the key may carry an env-style prefix.
     r"\bBearer\s+([A-Za-z0-9._\-]{8,})",
     r"\b(sk-[A-Za-z0-9]{16,})",
-    r"(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?key)"
-    r"\s*[:=]\s*[\"']?([A-Za-z0-9._\-]{16,})",
+    r"(?i)\b[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?key)"
+    r"[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9._\-]{16,})",
 ]
 SECRET_ENV_DEPTH = 2
 HASH_LIMIT = 8_000_000
+# Placeholder env files a project commits on purpose carry no live value.
+ENV_PLACEHOLDER_SUFFIXES = (".example", ".sample", ".template", ".dist")
 
 
 @dataclass
@@ -662,7 +668,9 @@ def scan_hub_knowledge(
     for root, kind, plane, scope, check_index, suffixes in groups:
         if not root.is_dir():
             continue
-        for path in iter_files(root, suffixes=suffixes, errors=errors):
+        # A repository checked out inside a hub section is a project with its
+        # own scan, never hub state or knowledge: the walk stops at its root.
+        for path in iter_files(root, suffixes=suffixes, errors=errors, prune=is_git_root):
             indexed = None
             if check_index and kind == "knowledge":
                 indexed = is_indexed(path.name, knowledge_index)
@@ -778,6 +786,11 @@ def extra_skill_roots() -> List[Tuple[str, Path]]:
         if not sep or not name.strip() or not raw.strip():
             raise ValueError(f"GUSTER_EXTRA_SKILL_ROOTS entries must be name=path: {item!r}")
         root = Path(raw.strip()).expanduser()
+        if not root.is_absolute():
+            raise ValueError(
+                f"GUSTER_EXTRA_SKILL_ROOTS host {name.strip()!r} directory must be an "
+                f"absolute path: {root}"
+            )
         if not root.is_dir():
             raise ValueError(
                 f"GUSTER_EXTRA_SKILL_ROOTS host {name.strip()!r} directory does not exist: {root}"
@@ -838,6 +851,14 @@ def scan_skills(home: Path) -> List[Dict[str, Any]]:
     return skills
 
 
+def is_env_secret_name(name: str) -> bool:
+    """`.env` and its variants (`.env.local`, `.env.production` ...), minus the
+    placeholder files a project commits on purpose."""
+    if name == ".env":
+        return True
+    return name.startswith(".env.") and not name.lower().endswith(ENV_PLACEHOLDER_SUFFIXES)
+
+
 def find_env_files(root: Path, max_depth: int = SECRET_ENV_DEPTH) -> List[Path]:
     """`.env` files under a project, bounded by depth so the scan stays cheap."""
     found: List[Path] = []
@@ -849,7 +870,7 @@ def find_env_files(root: Path, max_depth: int = SECRET_ENV_DEPTH) -> List[Path]:
         except OSError:
             continue
         for entry in entries:
-            if entry.is_file() and entry.name == ".env":
+            if entry.is_file() and is_env_secret_name(entry.name):
                 found.append(entry)
             elif (
                 entry.is_dir()
@@ -884,7 +905,12 @@ def scan_secret_files(
         tools_root = resolve_hub_layout(hub).get("tools")
         if tools_root and tools_root.is_dir():
             for path in iter_files(tools_root, max_depth=3, errors=errors):
-                if path.name in SECRET_SUFFIX_NAMES or path.name.startswith("credentials.") or path.name.endswith(".local.json"):
+                if (
+                    path.name in SECRET_SUFFIX_NAMES
+                    or path.name.startswith("credentials.")
+                    or path.name.endswith(".local.json")
+                    or is_env_secret_name(path.name)
+                ):
                     candidates.append(path)
     for zone in zones:
         candidates.extend(find_env_files(Path(zone["path"]).expanduser()))
@@ -902,10 +928,17 @@ def scan_secret_files(
             continue
         seen.add(resolved)
         canonical = is_under(path, home / ".agents" / "credentials")
+        # The nearest enclosing project that is a git root answers the tracked
+        # question. A workspace container tracks nothing itself, so a file
+        # inside one of its repositories must not be judged by the container.
+        owners = sorted(
+            (Path(project["path"]) for project in projects if is_under(path, Path(project["path"]))),
+            key=lambda item: len(item.parts),
+            reverse=True,
+        )
         tracked: Optional[bool] = None
-        for project in projects:
-            project_root = Path(project["path"])
-            if not is_under(path, project_root):
+        for project_root in owners:
+            if not is_git_root(project_root):
                 continue
             tracked_set = project_tracked.get(str(project_root))
             if tracked_set is None:
@@ -917,8 +950,8 @@ def scan_secret_files(
                     rel = ""
                 tracked = rel in tracked_set
             break
-        if tracked is None and not any(is_under(path, Path(p["path"])) for p in projects):
-            # Outside every scanned repository there is nothing that could track it.
+        else:
+            # No repository owns the file, so nothing could track it.
             tracked = False
         try:
             size = path.stat().st_size
@@ -946,7 +979,8 @@ def scan_credential_registry(home: Path) -> Dict[str, Any]:
             stripped = line.strip()
             if not stripped.startswith("|"):
                 continue
-            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            # Markdown code spans are formatting, never part of a path or a key name.
+            cells = [cell.strip().replace("`", "") for cell in stripped.strip("|").split("|")]
             if cells[0] in {"ID", ""} or set(cells[0]) <= {"-", ":"}:
                 continue
             if len(cells) < 6:
@@ -981,7 +1015,7 @@ def scan_credential_registry(home: Path) -> Dict[str, Any]:
 
 def infer_secret_kind(path: Path) -> str:
     name = path.name.lower()
-    if name.endswith(".env") or name.endswith(".env.example"):
+    if name == ".env" or name.startswith(".env."):
         return "env"
     if "token" in name or "secret" in name or "credential" in name:
         return "token"
@@ -998,12 +1032,15 @@ def scan_inline_bearers(home: Path) -> List[Dict[str, Any]]:
             continue
         text = read_text(path, limit=2_000_000)
         values: List[str] = []
+        seen: Set[str] = set()
         for pattern in INLINE_PATTERNS:
             for match in re.finditer(pattern, text):
                 value = match.group(1) if match.groups() else match.group(0)
-                redacted = f"{value[:4]}...{value[-4:]}"
-                if redacted not in values:
-                    values.append(redacted)
+                if value in seen:
+                    continue
+                seen.add(value)
+                # A first/last reveal would reproduce a short value in full.
+                values.append(f"{value[:4]}...{value[-4:]}" if len(value) >= 16 else "****")
         if values:
             records.append({"path": str(path), "count": len(values), "redacted": values})
     return records

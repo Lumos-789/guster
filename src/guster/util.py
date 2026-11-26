@@ -5,13 +5,14 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 try:
     import fcntl
@@ -120,20 +121,41 @@ def read_text(path: Path, limit: Optional[int] = None) -> str:
     return text
 
 
-def write_text(path: Path, text: str) -> None:
-    """Atomic replace: a concurrent reader sees the old or the new file, never a mix."""
+def _replace_atomically(path: Path, text: str, mode: Optional[int]) -> None:
+    """Atomic replace: a concurrent reader sees the old or the new file, never a mix.
+    A None mode keeps an existing file's permission bits and gives a new file the
+    umask default; mkstemp alone would hand back a 0600 file either way."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except OSError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+        os.chmod(tmp_name, mode)
         os.replace(tmp_name, path)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)
         raise
+
+
+def write_text(path: Path, text: str) -> None:
+    """Workspace and report writes: an existing file keeps its mode (a rewritten
+    script stays executable), a new one gets the umask default."""
+    _replace_atomically(path, text, None)
+
+
+def write_private(path: Path, text: str) -> None:
+    """Guster state writes: the state dir inventories the machine, so 0600 always."""
+    _replace_atomically(path, text, 0o600)
 
 
 @contextmanager
@@ -247,7 +269,7 @@ def is_indexed(name: str, index_text: str) -> bool:
 
 
 def save_json(path: Path, data: Any) -> None:
-    write_text(path, json_dumps(data) + "\n")
+    write_private(path, json_dumps(data) + "\n")
 
 
 def parse_frontmatter(text: str) -> Tuple[Dict[str, str], str]:
@@ -365,52 +387,73 @@ def parse_register_rows(text: str) -> List[Dict[str, str]]:
     Returns one dict per top-level `- id: ...` entry with the flat keys the
     drift reconciliation needs: id, status, as_of, name and the spec.path
     nested one level down. Header keys (schema/kind/updated) and any other
-    nesting are ignored. Dependency-free by design, like parse_yaml_head."""
+    nesting are ignored. A row owns the keys at its own key indent; anything
+    deeper belongs to a nested block (a block list, a sub-mapping) and never
+    reaches the row, whichever key it sits under. Dependency-free by design,
+    like parse_yaml_head."""
     rows: List[Dict[str, str]] = []
     current: Optional[Dict[str, str]] = None
+    row_indent = 0
+    key_indent = 0
+    spec_indent = 0
     in_spec = False
-    skipping_nested = False
     for line in text.lstrip("\ufeff").splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        indented = line[:1].isspace()
         indent = len(line) - len(line.lstrip(" "))
         item = _ROW_ITEM.match(stripped)
         if item is not None:
-            if not indented or indent <= 2:
-                payload = item.group(1)
-                match = _ROW_KEY.match(payload)
-                if match is not None and match.group(1) == "id":
-                    current = {"id": _scalar(match.group(2) or "")}
-                    rows.append(current)
-                    in_spec = False
-                    skipping_nested = False
-                    continue
-            else:
-                # a deeper `- key:` list item (deps, aliases...) belongs to a
-                # nested block, never to the current top-level row
-                skipping_nested = True
+            if current is not None and indent > row_indent:
+                # a list item inside one of the row's blocks
                 continue
-        if current is None or skipping_nested:
+            current = None
+            payload = item.group(1)
+            match = _ROW_KEY.match(payload)
+            if match is not None and match.group(1) == "id" and indent <= 2:
+                current = {"id": _scalar(match.group(2) or "")}
+                rows.append(current)
+                row_indent, key_indent, spec_indent, in_spec = indent, 0, 0, False
             continue
-        if line[:1].isspace():
-            match = _ROW_KEY.match(stripped)
-            if match is None:
-                continue
-            key = match.group(1)
-            raw = (match.group(2) or "").strip()
-            if in_spec:
-                if key == "path" and raw:
-                    current["path"] = _scalar(raw)
-                continue
-            if key == "spec" and raw == "":
-                in_spec = True
-            elif raw and key in ("status", "as_of", "name"):
-                current[key] = _scalar(raw)
-        else:
-            in_spec = False
+        if current is None:
+            continue
+        if indent <= row_indent:
+            # back at the rows' own level: the row is over
+            current = None
+            continue
+        if not key_indent:
+            key_indent = indent
+        if indent > key_indent and not in_spec:
+            continue
+        match = _ROW_KEY.match(stripped)
+        if match is None:
+            continue
+        key = match.group(1)
+        raw = (match.group(2) or "").strip()
+        if indent == key_indent:
+            in_spec, spec_indent = False, 0
+        if in_spec:
+            if not spec_indent:
+                spec_indent = indent
+            if key == "path" and raw and indent == spec_indent:
+                current["path"] = _scalar(raw)
+        elif key == "spec" and raw == "":
+            in_spec = True
+        elif key == "spec" and raw.startswith("{"):
+            inline = re.search(r"(?:^|,)\s*path\s*:\s*([^,}]+)", raw)
+            if inline:
+                current["path"] = _scalar(inline.group(1))
+        elif raw and key in ("status", "as_of", "name"):
+            current[key] = _scalar(raw)
     return rows
+
+
+_FLOW_ROW_LINE = re.compile(r"^[ \t]*-[ \t]*\{[^\n]*?\bid[ \t]*:", re.MULTILINE)
+
+
+def has_flow_style_rows(text: str) -> bool:
+    """`- {id: ...}` rows: valid YAML that the line-oriented reader never sees."""
+    return _FLOW_ROW_LINE.search(text) is not None
 
 
 _TOP_ROW_KEY_LINE = re.compile(r"^(?:id|name):(?:\s|$)", re.MULTILINE)
@@ -435,6 +478,7 @@ def iter_files(
     max_depth: Optional[int] = None,
     skip_dirs: Optional[Set[str]] = None,
     errors: Optional[List[str]] = None,
+    prune: Optional[Callable[[Path], bool]] = None,
 ) -> Iterator[Path]:
     if not root.exists():
         return
@@ -450,12 +494,16 @@ def iter_files(
         depth = len(current_path.relative_to(root).parts)
         if max_depth is not None and depth >= max_depth:
             dirs[:] = []
-        dirs[:] = sorted(d for d in dirs if d not in skip)
+        dirs[:] = sorted(d for d in dirs if d not in skip and not (prune and prune(current_path / d)))
         for name in sorted(files):
             path = current_path / name
             if suffixes is not None and path.suffix.lower() not in suffixes:
                 continue
             yield path
+
+
+def is_git_root(path: Path) -> bool:
+    return (path / ".git").exists()
 
 
 def find_git_roots(roots: Sequence[Path], max_depth: int = 5) -> List[Path]:
@@ -472,7 +520,7 @@ def find_git_roots(roots: Sequence[Path], max_depth: int = 5) -> List[Path]:
         seen.add(resolved)
         if not path.is_dir():
             return
-        if (path / ".git").exists():
+        if is_git_root(path):
             found.append(path)
             return
         if depth >= max_depth:
