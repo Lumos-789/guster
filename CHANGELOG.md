@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.9.7 — 2026-11-26
+
+- **Hub sections stop at nested repositories.** The hub walk over the project
+  state root, `register/`, `handoff/`, `reports/`, `output/` and the knowledge
+  subzones no longer descends into a directory that is itself a git root, and
+  a project's instruction-file walk stops at a nested repository the same way.
+  A repository checked out inside a hub section is a project with its own
+  scan, never hub state or knowledge. On a hub whose project tree holds
+  checkouts this removes almost the whole scan — in one such hub
+  `doctor --scope hub` went from about 27 seconds to under half a second and
+  the registry from about 16 MB to 0.1 MB — and takes the pointer findings
+  about those repositories' `AGENTS.md` out of the hub report. To audit a
+  nested repository as a project, add its parent directory as a root.
+- **`guster init --root` adds a root on an initialized machine.** It used to
+  print `APPLIED` and exit 0 while leaving the directory out of the config,
+  which made the `registry-drift` hint that names it a dead end. The directory
+  is merged into `roots` (deduplicated by resolved path, so `~/code` and its
+  absolute spelling are one root); other config keys and the spelling of
+  existing roots are untouched, a root that is already configured says so, and
+  an invalid config is still refused.
+- **The owning repository answers "is this file tracked".** When a scanned
+  root carries a project marker and holds repositories of its own, a tracked
+  `.env` inside one of them was judged against the outer container and read
+  as untracked, so `secret-in-git` never fired. The nearest enclosing git root
+  answers now.
+- **Wider credential detection.** `.env` variants (`.env.local`,
+  `.env.production`, ...) are credential files, with `example`, `sample`,
+  `template` and `dist` placeholders excepted. The host-config key pattern
+  reads JSON spelling (`"ACME_API_KEY": "..."`) as well as TOML and YAML; the
+  key vocabulary is unchanged. A token shorter than 16 characters is masked as
+  `****` instead of being reproduced in full by a first/last reveal.
+- **The documented registry row works as printed.** Backticks around a table
+  cell are formatting now; copying the README example used to raise
+  `secret-missing` and count the declared file as undeclared.
+- **register/v1 parsing.** A block-style list anywhere in a row no longer
+  swallows the keys after it (`spec.path`, `as_of`, `status`), a sub-mapping
+  under `spec` no longer overrides `path`, and an inline `spec: {path: ...}`
+  is read. A flow-style row (`- {id: ...}`) is reported through
+  `registry-format` instead of parsing as zero rows.
+- **Writes keep file permissions.** `apply` and the scaffolds handed back
+  every file as 0600, which dropped the executable bit of a rewritten script.
+  An existing file keeps its mode and a new one gets the umask default. Guster
+  state files stay 0600; the JSON export is written like a report.
+- **Rollback and plan contract.** A `move` that creates destination
+  directories records them for undo, so a rolled-back hand-written plan leaves
+  no empty directories behind. A `manual` op's `path` is free text, as
+  `schemas/plan.schema.json` states; only `mkdir`, `move` and `write` need an
+  absolute path. `GUSTER_EXTRA_SKILL_ROOTS` directories must be absolute.
+- **Command face.** `status` rescans with a warning when the cached registry
+  has an unexpected shape instead of failing with a traceback, and
+  `status --json` carries `zones`, `unconfigured` and `auto_roots`.
+  `credentials --json` includes `parse_warnings`. `zones add`/`remove` blame a
+  relative path on the argument. A dry run says `would apply` instead of
+  `applied`. The stale-state checklist lists every stale document, and the
+  unscanned-row hint names `guster init --root <dir>`.
+- **Capped findings are announced.** `secret-in-git` is listed for the first
+  20 files and each pointer rule for the first 100; the rest collapse into one
+  info `finding-cap` that names the total. The cap is computed after scope
+  filtering and waivers.
+- Docs: a scoped report omits the dimensions outside CHI instead of labeling
+  them; `zones add`/`remove` and the root-adding `init` are listed as writers
+  of Guster config; the scaffold tree no longer lists `.agents/plans/`, which
+  the scaffold does not create; the scaffold `.gitignore` ignores `.agents/`;
+  the tools index drops the retired profile wording; the hub schema
+  description no longer names a removed metric. The pip console entry is
+  removed — the wheel never carried the templates, schemas or skills, so the
+  installed command could not scaffold a hub.
+- Verified on Python 3.9.6 as well as 3.14 (294 tests each); 3.9 had only been
+  reviewed statically before.
+
 ## 0.9.6 — 2026-11-23
 
 - **Legacy hub layout names removed from the scanner.** The hub scan still
